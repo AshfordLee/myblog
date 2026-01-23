@@ -1,0 +1,167 @@
+---
+title: 'CS336 Assignment 1 - 手搓BPE和Tranformer'
+description: 'CS336 Assignment1 Notes'
+publishDate: '2026-1-23'
+tags: ['CS336']
+# heroImage: { src: './thumbnail.jpg', alt: '作业封面图片' }
+# heroImage: {}
+language: '中文'
+draft: false
+---
+
+import { Card, Button } from 'astro-pure/user'
+
+> 从一份TinyStories的故事集到Transformer模型, 就像是从原始人一夜当中走进了现代
+
+# CS336 Assignment 1
+
+这是我做过的第一个(也许也会是最后一个)几乎没什么Skeleton Code的Lab, 这门课的目标是让学习者彻底搞懂大模型的原理，并且从"Scratch"来从头构建大模型。
+
+任务拆分开,大概有这么几点:
+
+首先是工程架构部分:
+-   `bpe.py`: Byte-pair encoding(BPE) tokenizer, 在字节级别上实现一个分词器。
+-   `transformer.py`: Transformer language model (LM), 实现Transformer的各模块并且组合成可实例化的Transformer类
+-   `transformer.py`: The cross-entropy loss function and the AdamW optimizer, 实现AdamW优化器和损失函数
+-   `train_transformer.py`: The training loop, with support for serializing and loading model and optimizer state, 实现训练循环
+
+其次是跑训练和测试:
+-   `train_bpe_tinystories.py`: Train a BPE tokenizer on the TinyStories dataset. 在Tinystories数据集上训练这个BPE分词器
+-   `tokenizer_experiments.py`: Run your trained tokenizer on the dataset to convert it into a sequence of integer IDs. 在数据集上应用分词器, 把文字数据集转化成整数序列
+-   `train_transformer.py`: Train a Transformer LM on the TinyStories dataset. 利用分词器的结果训练Transformer模型
+-   `TODO_generate_samples.py`: Generate samples and evaluate perplexity using the trained Transformer LM. 用训练好的模型产生结果并且计算困惑度
+-   `TODD_train_transformer_OpenWebText.py`: Train models on OpenWebText. 在OpenWebText数据集上训练Transformer模型
+
+
+
+## 作业要求
+
+-   `torch.nn.parameter`
+-   `torch.nn`
+-   `torch.optim.Optimizer`(作为基类) 
+
+这个作业主要还是让学习者实现算法和工程架构,至于底层那些并行计算之类的,交给PyTorch的开发者去做吧
+
+## 评测框架
+
+没有给出直接一键运行的测试,虽然测试的输入和输出ASSERT是实现好的,但是要自己去接这个测试接口,测试逻辑在`./assignment1-basics/tests`里面,测试接口在`./assignment1-basics/tests/adapters.py`里面
+
+比如在`transformer.py`我们实现了Linear Layer,对应的测试接口在:
+
+```python
+# Test For Implement of Linear Layer
+from cs336_basics import transformer
+
+def run_linear(
+    d_in: int,
+    d_out: int,
+    weights: Float[Tensor, " d_out d_in"],
+    in_features: Float[Tensor, " ... d_in"],
+) -> Float[Tensor, " ... d_out"]:
+    """
+    Given the weights of a Linear layer, compute the transformation of a batched input.
+
+    Args:
+        in_dim (int): The size of the input dimension
+        out_dim (int): The size of the output dimension
+        weights (Float[Tensor, "d_out d_in"]): The linear weights to use
+        in_features (Float[Tensor, "... d_in"]): The output tensor to apply the function to
+
+    Returns:
+        Float[Tensor, "... d_out"]: The transformed output of your linear module.
+    """
+
+    # raise NotImplementedError
+    linear_module = transformer.Linear(in_features=d_in,out_features=d_out)
+    linear_module.weight.data = weights
+    return linear_module(in_features)
+
+```
+`transformer.Linear`是我们实现的Linear类,实现这个接口之后，运行
+```bash
+uv run pytest -k test_linear
+```
+就可以运行预设的测试了
+
+## 下载数据
+有四个数据集,两个Train两个Valid,分别对应TinyStories和OpenWebText_Result数据集
+``` bash
+mkdir -p data
+cd data
+
+wget https://huggingface.co/datasets/roneneldan/TinyStories/resolve/main/TinyStoriesV2-GPT4-train.txt
+wget https://huggingface.co/datasets/roneneldan/TinyStories/resolve/main/TinyStoriesV2-GPT4-valid.txt
+
+wget https://huggingface.co/datasets/stanford-cs336/owt-sample/resolve/main/owt_train.txt.gz
+gunzip owt_train.txt.gz
+wget https://huggingface.co/datasets/stanford-cs336/owt-sample/resolve/main/owt_valid.txt.gz
+gunzip owt_valid.txt.gz
+
+cd ..
+```
+如果有网络问题，可以从`https://hf-mirror.com/`下载,替换下载命令里面的地址就行了
+
+## 环境配置
+本lab用uv做包管理器,我之前没用过完全不熟练,我是直接照着他文档里面的命令安装的,先安装uv
+```bash
+pip install uv
+```
+
+当运行某个py文件的时候,用uv命令运行,如果有依赖缺失会自动下载
+```bash
+uv run <python_file_path>
+```
+
+注意给uv也像pip一样配置一个国内源,不然安装一些大包可能要安装到明天早上去
+```bash
+# 推荐使用清华源
+echo 'export UV_DEFAULT_INDEX="https://pypi.tuna.tsinghua.edu.cn/simple"'>> ~/.bashrc
+
+# 或者用阿里源
+# echo 'export UV_DEFAULT_INDEX="https://mirrors.aliyun.com/pypi/simple/"' >> ~/.bashrc
+
+# 让配置立即生效
+source ~/.bashrc
+# 转载自https://zhuanlan.zhihu.com/p/1930714592423703026
+```
+
+## BPE算法
+文档中给出一个例子(stylized example),考虑以下的语料
+```
+low low low low low
+lower lower widest widest widest
+newest newest newest newest newest newest
+```
+
+我们有一个词语集合Vocabulary(代码里一般称为Vocab),可以理解为是一个词汇表，这个词汇表一开始内容很少,然后在训练的时候慢慢增长
+
+假如我们通过whitespace来对语料进行分割,我们就可以得到frequency table:
+```
+{low: 5, lower: 2, widest: 3, newest: 6}
+```
+
+但我们要换一种更方便的数据结构来表示,比如用`dict[tuple[bytes], int]`,那么这个表被表示成:
+```
+{(l,o,w):5,(l,o,w,e,r):2, ...}
+```
+
+接下来我们统计这个frequency table里面byte(char)对的两两组合,这就是个计数的工程,得到的结果是:
+```
+{lo: 7, ow: 7, we: 8, er: 2, wi: 3, id: 3, de: 3, es: 9, st: 9, ne: 6, ew: 6}
+```
+
+找到那些出现次数最多的组,这个例子里面是
+```
+{es:9, st:9}
+```
+挑选字典序更大的那个,这里是st,把所有的's' 't' 组合成st,所以这个frequency table就变成了
+```
+ {(l,o,w): 5, (l,o,w,e,r): 2, (w,i,d,e,st): 3, (n,e,w,e,st): 6}
+```
+## 结果展示
+
+展示您的作业结果...
+
+## 总结
+
+总结这次作业的收获...

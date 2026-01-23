@@ -11,9 +11,12 @@ import Section from '@/components/home/Section.astro'
 import SkillLayout from '@/components/home/SkillLayout.astro'
 import config from '@/site-config'
 
-const languages = ['Html', 'JavaScript', 'CSS', 'Shell']
-const frontend = ['TypeScript', 'Vite', 'Webpack', 'Astro']
-const backend = ['Vercel', 'Waline']
+const languages = ['Chinese (Mandarin)','English']
+// const frontend = ['TypeScript', 'Vite', 'Webpack', 'Astro']
+const programming_languages = ['C++','C','Python','PyTorch','MySQL','Clickhouse','DolphinDB']
+// const backend = ['Vercel', 'Waline']
+const Tools = ['VSCode','Cursor','Git','Linux']
+const writings = ['LaTeX','Markdown']
 
 const MAX_POSTS = 10
 const allPosts = await getBlogCollection()
@@ -35,7 +38,7 @@ if (!images[imagePath])
       <Image
         src={images[imagePath]()}
         alt={config.logo.alt || 'Profile'}
-        class='h-28 w-auto rounded-full border p-1'
+        class='h-36 w-auto rounded-full border p-1'
         loading='eager'
         fetchpriority='high'
       />
@@ -43,20 +46,20 @@ if (!images[imagePath])
       <div class='flex flex-col items-center gap-y-4'>
         <h1 class='text-3xl font-medium'>{config.author}</h1>
         <div class='flex flex-wrap justify-center gap-x-7 gap-y-3'>
-          <Label title='Somewhere'>
+          <Label title='China / Shanghai'>
             <Icon name='location' class='size-5' slot='icon' />
           </Label>
           <Label
-            title='Source code'
+            title='Github'
             as='a'
-            href='https://github.com/cworld1/astro-theme-pure'
+            href='https://github.com/AshfordLee'
             target='_blank'
           >
             <Icon name='github' class='size-5' slot='icon' />
           </Label>
         </div>
       </div>
-
+<!-- 
       {/* Get template */}
       <a
         href='https://github.com/cworld1/astro-theme-pure'
@@ -70,20 +73,23 @@ if (!images[imagePath])
           <span class='size-2 rounded-full bg-green-400'></span>
         </span>
         <p class='font-medium text-muted-foreground'>Get Template</p>
-      </a>
+      </a> -->
     </section>
 
     <div id='content' class='animate flex flex-col gap-y-10 md:w-4/5 lg:w-5/6'>
       <Section title='About'>
-        <p class='text-muted-foreground'>Developer / Designer</p>
+        <p class='text-muted-foreground'>Developer / Quantitative Researcher / Student</p>
         <p class='text-muted-foreground'>
-          Lorem ipsum dolor sit amet, vidit suscipit at mei. Quem denique mea id. Usu ei regione
-          indoctum dissentiunt, cu meliore fuisset mei, vel quod voluptua ne. Ex dicat impedit mel,
-          at eum oratio possit voluptatum.
+          Hello and welcome to my personal website! I am currently a Master's student in Mathematics at Tongji University.
+          I hold a Bachelor of Engineering in Computer Science and a Bachelor of Arts in Translation from the University of Electronic Science and Technology of China.
+        <p>
+          My past research internships focused on quantitative finance and the mathematical optimization underlying DFT algorithms.
+        <p>
+          In Fall 2027 I plan to apply for PhD programs in Computer Science in the United States, focusing on LLMs, NLP, and machine learning.
         </p>
-        <Button title='More about me' class='w-fit self-end' href='/about' variant='ahead' />
+        <!-- <Button title='More about me' class='w-fit self-end' href='/about' variant='ahead' /> -->
       </Section>
-      {
+      <!-- {
         allPostsByDate.length > 0 && (
           <Section title='Posts'>
             <ul class='flex flex-col gap-y-1.5 sm:gap-y-2'>
@@ -96,58 +102,92 @@ if (!images[imagePath])
             <Button title='More posts' class='w-fit self-end' href='/blog' variant='ahead' />
           </Section>
         )
-      }
+      } -->
 
       {
-        /* <Section title='Experience'>
-      <Card
+        <Section title='Experience'>
+            <Card
+              as="a"
+              heading='Zhanhong Investment(上海展弘投资)'
+              subheading='HFT Quantitative Researcher Intern'
+              date='Apr 2024 - Present'
+              href='https://www.zh-invest.net/stationWebsite/w/h'
+            >
+              <img
+                class='absolute end-0 z-0 m-0 -my-3 h-full w-1/2 object-cover opacity-40'
+                src='/images/Zhanhong.png'
+                alt='Zhanhong Investment Logo'
+              />
+            </Card>
+      {/* <Card
         heading='Lorem Ipsum'
         subheading='Sit amet consectetur'
         date='Dec 2022 - Nov 2023'
         imagePath='/src/assets/about-astro.png'
         altText='Lorem, ipsum dolor sit'
         imageClass='h-12 w-auto md:-start-16'
-      >
-        <ul class='ms-4 list-disc text-muted-foreground'>
-          <li>
-            Lorem, ipsum dolor sit amet consectetur adipisicing elit. Dolore debitis recusandae, ut
-            molestiae laboriosam pariatur!
-
-            <li>Lorem ipsum dolor sit amet consectetur adipisicing elit. Molestiae, pariatur!</li>
-          </li>
-        </ul>
-      </Card>
-      <Card
-        heading='Lorem Ipsum'
-        subheading='Sit amet consectetur'
-        date='Dec 2022 - Nov 2023'
-        imagePath='/src/assets/about-astro.png'
-        altText='Lorem, ipsum dolor sit'
-        imageClass='h-12 w-auto md:-start-16'
-      />
-    </Section> */
+      /> */}
+    </Section> 
       }
       <Section title='Education'>
         <Card
           as='a'
-          heading='Lorem ipsum'
-          subheading='Lorem ipsum dolor sit amet, vidit suscipit at mei.'
-          date='August 2021 - July 2025'
-          href='https://www.youtube.com/watch?v=dQw4w9WgXcQ'
+          heading='Tongji University'
+          subheading='Master in Science, Mathematics'
+          date='Sept 2023 - Jun 2027'
+          href='https://math.tongji.edu.cn/'
         >
-          {
-            /* <ul class='ms-4 list-disc text-muted-foreground'>
-          <li>
-            Lorem, ipsum dolor sit amet consectetur adipisicing elit. Dolore debitis recusandae, ut
-            molestiae laboriosam pariatur!
-          </li>
-          <li>Lorem ipsum dolor sit amet consectetur adipisicing elit. Molestiae, pariatur!</li>
-        </ul> */
-          }
+        <img
+        class='absolute end-0 z-0 m-0 -my-3 h-full w-1/2 object-cover opacity-40'
+        src='/images/Tongji.png'
+        alt='Tongji University Logo'
+      />
+        </Card>
+
+        <Card
+          as='a'
+          heading='University of Electronic Science and Technology of China'
+          subheading='Bachelor in Engineering, Computer Science'
+          date='Sept 2019 - Jun 2023'
+          href='https://www.scse.uestc.edu.cn/'
+        >
+        <img
+        class='absolute end-0 z-0 m-0 -my-3 h-full w-1/2 object-cover opacity-40'
+        src='/images/UESTC.png'
+        alt='UESTC Logo'
+      />
+        </Card>
+
+        <Card
+          as='a'
+          heading='University of Electronic Science and Technology of China'
+          subheading='Bachelor in Art, English-Translation'
+          date='Sept 2019 - Jun 2023'
+          href='https://www.fl.uestc.edu.cn/'
+        >
+        <img
+        class='absolute end-0 z-0 m-0 -my-3 h-full w-1/2 object-cover opacity-40'
+        src='/images/UESTC.png'
+        alt='UESTC Logo'
+      />
+        </Card>
+
+        <Card
+          as='a'
+          heading='Nanchang Foreign Language School'
+          subheading='High School Diploma, No College Entrance Exam'
+          date='Sept 2013 - Jun 2019'
+          href='https://wgy.nceduc.cn/'
+        >
+        <img
+        class='absolute end-0 z-0 m-0 -my-3 h-full w-1/2 object-cover opacity-40'
+        src='/images/NCFLS.png'
+        alt='NCFLS Logo'
+      />
         </Card>
       </Section>
 
-      <Section title='Website List'>
+      <!-- <Section title='Website List'>
         <div class='grid grid-cols-1 gap-3 sm:grid-cols-2'>
           <ProjectCard
             href='https://www.youtube.com/watch?v=dQw4w9WgXcQ'
@@ -174,24 +214,37 @@ if (!images[imagePath])
             imagePath='/src/assets/projects/4.avif'
           />
         </div>
-      </Section>
+      </Section> -->
 
       <Section title='Certifications'>
         <Card
           as='a'
-          heading='Lorem ipsum'
-          subheading='Lorem ipsum dolor sit amet, vidit suscipit at mei. Quem denique mea id. Usu ei regione indoctum dissentiunt, cu meliore fuisset mei, vel quod voluptua ne. Ex dicat impedit mel, at eum oratio possit voluptatum. Dicat ceteros cu vim. Impetus fuisset ullamcorper pri cu, his posse iisque ad, aliquam honestatis usu id.'
-          date='July 2024'
-          href='https://www.youtube.com/watch?v=dQw4w9WgXcQ'
+          heading='Test For English Major, Grade 8'
+          subheading=''
+          date='April 2024'
+
+        />
+        <Card
+          as='a'
+          heading='Test For English Major, Grade 4'
+          subheading=""
+          date="Ju 2021"
         />
       </Section>
 
       <Section title='Skills'>
         <SkillLayout title='Languages' skills={languages} />
-        <SkillLayout title='Frontend' skills={frontend} />
-        <SkillLayout title='Backend' skills={backend} />
+        <SkillLayout title='Programming Languages' skills={programming_languages} />
+        <SkillLayout title='Tools' skills={Tools} />
+        <SkillLayout title='Writings' skills={writings}>
       </Section>
     </div>
-    <Quote class='mt-12' />
+    <!-- <Quote class='mt-12' /> -->
+
+    <p class='mt-12 text-center text-muted-foreground italic'>
+      “I believe there’s winners and losers.. and nothing else besides.”
+      <p>
+       - Micah Bell in Red Dead Redemption 2
+    </p>
   </main>
 </PageLayout>
