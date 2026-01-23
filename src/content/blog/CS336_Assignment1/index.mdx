@@ -158,6 +158,28 @@ newest newest newest newest newest newest
 ```
  {(l,o,w): 5, (l,o,w,e,r): 2, (w,i,d,e,st): 3, (n,e,w,e,st): 6}
 ```
+然后再把'st'添加到vocab里面去
+
+再重复上面这个那个计数的步骤,这一次'e' 'st'是出现最频繁的,所以对他进行合并
+
+如果我们重复合并到没有可以继续的了,我们的merges应该是:
+```
+['s t', 'e st', 'o w', 'l ow', 'w est', 'n e',
+'ne west', 'w i', 'wi d', 'wid est', 'low e', 'lowe r']
+```
+其中的每一项代表我们在那一次合并当中把两个什么东西(byte)合并了
+
+当然实际上并不一定要合并到最后,我们可以指定合并的次数,比如例子中指定为6次,那么merges应该是:
+
+```
+['s t', 'e st', 'o w', 'l ow', 'w est', 'n e']
+```
+
+这种情况下我们的vocab将会变成
+```
+[<|endoftext|>, [...256 BYTE CHARS], st, est, ow, low, west, ne]
+```
+其中前面两个是init vocab的时候就已经有的,然后每一次merge的时候会往vocab里面加一项
 ## 结果展示
 
 展示您的作业结果...
