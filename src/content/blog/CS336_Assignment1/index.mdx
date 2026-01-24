@@ -180,6 +180,226 @@ newest newest newest newest newest newest
 [<|endoftext|>, [...256 BYTE CHARS], st, est, ow, low, west, ne]
 ```
 其中前面两个是init vocab的时候就已经有的,然后每一次merge的时候会往vocab里面加一项
+
+如此一来的话,词语newest就会被分词成为'ne' 'west', 换言之这个merge的过程就是把分词这件事情从细变粗的过程,最开始每一个词语都是一个一个字母分的,现在有一部分字母被聚合了
+
+
+## 并行预分词  Parallelizing pre-tokenization
+
+### chunk和对每个chunk的处理
+首先要对原有的文本进行预分词,以TinyStories数据集为例:
+```
+u don't have to be scared of the loud dog, I'll protect you". The mole felt so safe with the little girl. She was very kind and the mole soon came to trust her. He leaned against her and she kept him safe. The mole had found his best friend.
+<|endoftext|>
+Once upon a time, in a warm and sunny place, there was a big pit. A little boy named Tom liked to play near the pit. One day, Tom lost his red ball. He was very sad.
+<|endoftext|>
+
+They went back to the living room and cleaned up their toys. They decided to build something together. They made a big house with a garden and a fence. They put their cars and dolls inside. They were happy and proud of their work.
+Mommy and Daddy came to see their house. They praised them and gave them a treat. It was a lemon cake. It was sour, but they liked it. They learned that sharing is caring, and that family is sweet.
+<|endoftext|>
+
+
+Lucy and the little girl played together happily. In the end, they both learnt an important lesson: be peaceful, kind, and understanding when faced with a conflict. And that is why Lucy and the little girl became great friends.
+<|endoftext|>
+
+At the end of the day, Tom and Max were tired. They had played all day and had lots of fun. They said goodbye to each other and went to their homes. Before going to sleep, they both did another easy stretch. Tom knew that tomorrow would be another happy morning.
+<|endoftext|>
+```
+
+忽略数据的内容,注意到故事和故事之间是用`<|endoftext|>`进行分割的,所以我们把两个`<|endoftext|>`之间的内容成为一个chunk,首先要把chunk提取出来并且得到每一个chunk的`frequency_dict`
+
+课程组给了一段现成的代码,在`./assignment1-basics/cs336_basics/pretokenization_example.py`里面,这个函数的作用是读取原始的Corpus,然后把chunk的边界,大概约等于上面说的`<|endoftext|>`的位置返回
+
+```python
+def find_chunk_boundaries(
+    file: BinaryIO,
+    desired_num_chunks: int,
+    split_special_token: bytes,
+) -> list[int]:
+```
+注意这个分割字符(在这个例子里面是`<|endoftext|>`),是不唯一的,当然有可能某个corpus的是用`<|Hello|>`来区分段落的,只要数据类型是`bytes`就行了
+
+既然需要并行,我们首先要写处理单个chunk的函数:构造如下
+
+```python
+def pretokenize_chunk(args): # Deal with a chunk
+    # bpe.py
+
+    start,end,input_path,split_special_token = args
+    # start: chunk的开始索引
+    # end: chunk的结束索引
+    # input_path: 文件目录
+    # split_special_token: chunk内的分隔符
+    
+    with open(input_path,"rb") as f: # 打开文件
+        f.seek(start) # 文件指针移动start偏移量(将文件读取指针移动到 start 指定的字节位置)
+        chunk_bytes = f.read(end - start).decode("utf-8", errors="ignore") 
+        # 读取start到end之间的数据
+        
+    split_pattern = "|".join(re.escape(token) for token in split_special_token)
+    # 现在这个split_pattern能够正则匹配任意的split_special_token内的分隔符
+    text_segments = re.split(f"({split_pattern})",chunk_bytes)
+    # 对文本进行分割, 返回交替的结果, 形如[文本段1, 分隔符1, 文本段2, 分隔符2, ...]
+
+    PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
+    # GPT-2 风格的正则分词
+
+
+    frequency_dict = defaultdict(int) # 初始化频率字典,注意用defaultdict来确保默认值为0,避免后面访问下标不存在的问题
+
+    for segment in text_segments: # 遍历文本段
+        if segment not in split_special_token: # 跳过分隔符,只处理实际文本
+
+            for match in re.finditer(PAT,segment): # 在这个实际文本当中找所有的匹配项,返回迭代器
+                pretoken = match.group()
+                pretoken_bytes = pretoken.encode("utf-8") # 编码成UTF-8
+                pretoken_bytes_tuple = tuple(bytes([b]) for b in pretoken_bytes)
+                # 转化成字节tuple,例如("h", "e", "l", "l", "o") 而不是 b"hello"
+
+                frequency_dict[pretoken_bytes_tuple] += 1
+                # 更新频率
+
+
+    return dict(frequency_dict)
+```
+要注意文本处理的架构(层次)是: `整个语料`->`单个chunk`->`chunk中的一个segment`->`segment当中的每个文本`
+
+如果`split_special_token = [b"<|endoftext|>"]`,文本为:
+```
+Story 1 content here.<|endoftext|>Story 2 content here.<|endoftext|>
+```
+那么经过分割后的`text_segments`为
+```
+[
+    "Story 1 content here.",  # 文本段
+    "<|endoftext|>",          # 分隔符（被保留）
+    "Story 2 content here.",  # 文本段
+    "<|endoftext|>"           # 分隔符（被保留）
+]
+```
+然后再遍历这个text_segments,得到的结果格式类似于(不一定准确,只是形式上类似,具体还要看这个PAT对每个segment的分割规则):
+```
+{
+    (b'S', b't', b'o', b'r', b'y'): 2,  # "Story" 出现2次
+    (b' ',): 6,                          # 单个空格出现6次
+    (b'1',): 1,                          # "1" 出现1次  
+    (b'2',): 1,                          # "2" 出现1次
+    (b'c', b'o', b'n', b't', b'e', b'n', b't'): 2,  # "content" 出现2次
+    (b'h', b'e', b'r', b'e'): 2,         # "here" 出现2次
+    (b'.',): 2,                          # "." 出现2次
+}
+```
+这就完成了对每个chunk的内部切割,接下来需要一个并行代码把每个chunk映射到这个函数上
+
+### 同时并行处理多个chunk
+我们应当用多进程同时处理多个chunk,每个chunk会独立的返回这个chunk内容的`frequency_dict`,然后把他们concat到一起去就得到了整个语料的频率字典
+
+```python
+def load_and_chunk_file(
+    input_path: str,
+    desired_num_chunks: int,
+    split_special_token: list[str],
+    Debug=False): 
+    # bpe.py
+
+    with open(input_path,"rb") as f: # 打开文件
+        num_processes = 16 # 设定并行的进程数量
+
+        split_token_bytes = split_special_token[0].encode("utf-8") # 拿到分隔符并且把他encode成bytes
+
+        boundaries = find_chunk_boundaries(file=f,desired_num_chunks=desired_num_chunks,split_special_token=split_token_bytes)
+        # 调用给出的find_chunk_boundaries函数, 这里返回的就是原始语料里面每个分隔符的位置,在这个项目里面就是每个<|endoftext|>的位置
+
+
+    with multiprocessing.Pool(processes=num_processes) as pool: # 并行处理
+        
+        chunk_args=[(start,end,input_path,split_special_token) for start,end in zip(boundaries[:-1],boundaries[1:])]
+        # 四个参数, 注意boundaries的数据类型是list[int], 从boundaries[0,1]开始滑动取得每一组start和end
+        # input_path和split_special_token都是不变的
+
+        results=pool.map(pretokenize_chunk,chunk_args)
+        # 传入参数并且获得并行传回的结果
+
+
+        total_frequencies = merge_frequencies(results)
+        # 把结果"concat"起来
+
+        return total_frequencies
+```
+
+注意这个`concat`其实不是真的`concat`, 因为不同的chunk里面有可能出现相同的词语,比如在chunk1和chunk2的`frequency_dict`里面也许都有
+```
+{(b'S', b't', b'o', b'r', b'y'): 2}
+```
+那显然concat之后得到的应该是:
+```
+{(b'S', b't', b'o', b'r', b'y'): 4}
+```
+所以需要对并行传回来的结果进行遍历,然后合并同类项
+```python
+# bpe.py
+def merge_frequencies(frequency_dict): # Calculate the frequencies from each chunks and sum them together
+
+    total_frequencies = defaultdict(int) # 初始化结果
+
+    for every_frequency_dict in frequency_dict: 
+    # 遍历每个chunk的frequency_dict
+        for pretoken_bytes, count in every_frequency_dict.items():
+
+            total_frequencies[pretoken_bytes] += count
+            # 保证不同chunk之间的同样的pretoken_bytes的计数不重不漏
+
+    return total_frequencies
+```
+
+### 初始化Vocab和Merges
+从前面那个例子可以看到, 训练过程本质上就是更新Vocab和Merges这两个结果的过程, 所以先对他们进行初始化
+```python
+# bpe.py
+def initialize_vocab_and_merges(special_tokens):
+    vocab = {}
+
+    for i in range(256):
+        vocab[i] = bytes([i]) # 初始的一些默认bytes
+
+    for special_token in special_tokens:
+        vocab[len(vocab)] = special_token.encode("utf-8") # 我们自己附加的special_tokens
+
+    return vocab,[]
+```
+随着训练进行, Vocab和Merges会越来越大
+
+### 初始化pair计数
+我们现在只得到了每个词语的计数, 但是如例子里面, 我们要对每个词语遍历拆出pair, 去对pair进行计数, 比如说输入是
+```
+{(b'S', b't', b'o', b'r', b'y'): 4}
+```
+那输出大概是
+```
+{'St':4, 'to':4, 'or':4, 'ry':4}
+```
+注意这里已经不分chunk了, 所以每次得到的结果就是全局的更新量了
+
+```python
+#bpe.py
+def get_initial_pair_frequencies(frequency_dict,Debug=False):
+
+    pair_freq = defaultdict(int)
+    pair_to_tokens = defaultdict(set)
+    # 初始化
+
+    for pretoken_bytes, count in frequency_dict.items():
+        # 遍历词频字典, 获取每个"单词"和他的计数
+
+
+        for i in range(len(pretoken_bytes)-1): # 遍历这个单词的所有相邻字符
+            pair = ((pretoken_bytes[i],), (pretoken_bytes[i+1],)) # 取得相邻的pair
+            pair_freq[pair] = pair_freq.get(pair,0) + count # 更新这个pair的计数
+            pair_to_tokens[pair].add(pretoken_bytes) # 记住某一个pair出现在哪个单词里面
+
+
+    return pair_freq, pair_to_tokens
+```
 ## 结果展示
 
 展示您的作业结果...
