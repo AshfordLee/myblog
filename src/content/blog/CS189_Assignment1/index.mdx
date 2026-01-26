@@ -6,7 +6,7 @@ tags: ['CS189']
 # heroImage: { src: './thumbnail.jpg', alt: '作业封面图片' }
 # heroImage: {}
 language: '中文'
-draft: false
+draft: true
 ---
 
 import { Card, Button } from 'astro-pure/user'
@@ -267,4 +267,90 @@ np.stack(df['image'].values).shape
 (60000, 784)
 ```
 
-这里说一下这个`np.stack(arrays, axis, out)`的用法, 以前每次都是AI
+这里说一下这个`np.stack(arrays, axis, out)`的用法, 以前每次都是AI写, 不太清楚其中原理
+
+`np.stack`作用于一些数组, 这些数组必须有相同的shape, 沿着axis指定的轴拼起来, 这会加入第n+1个维度, 就像两本书叠起来, 显然要有一个z轴来标识这是第一本书还是第二本书
+
+```python
+a = np.array([1, 2, 3])
+b = np.array([4, 5, 6])
+np.stack((a, b))
+# array([[1, 2, 3],
+#        [4, 5, 6]]) 2*3, 第0维出现一个2
+
+np.stack((a, b), axis=-1)
+# array([[1, 4],
+#        [2, 5],
+#        [3, 6]]) 3*2, 第1维出现一个3
+```
+简而言之就是axis是多少, 结果在第axis个维度上就会出现一个n, n是数组的个数
+
+## Problem 2a
+调用`sklearn.KMeans`进行聚类
+
+```python
+# TODO: Perform k-means clustering on the images (10 clusters to match the number of classes)
+from sklearn.cluster import KMeans
+
+df_sample = df.sample(n=1000, random_state=SEED)
+kmeans=KMeans(n_clusters=10,random_state=SEED)
+X=np.stack(df_sample['image'].to_numpy())
+cluster_labels=kmeans.fit_predict(X)
+
+kmeans_df=df_sample.assign(cluster=cluster_labels)
+
+kmeans_df.head(3)
+```
+这里的np.stack就是把一堆图片点聚集起来, 现在这个kmeans_df有了一个新的列cluster, 代表聚类的结果, 比如说会把一些行聚类成1类, 2类....以此类推, 总共10个类
+
+## Problem 2b
+评估KMeans聚类的效果
+
+只需要对label(聚类的结果)groupby一下然后看每个聚类里面有多少种不同的`true_label`, 如果聚类的效果比较好的话, 应该每种聚类里面有尽可能少的`true_label`种类
+
+```python
+# TODO: Create a stacked bar plot of the label counts per cluster.
+cluster_label_counts = kmeans_df.groupby(['cluster', 'label']).size().unstack(fill_value=0)
+
+cluster_label_counts.plot(
+    kind='bar',
+    title='Distribution of True Labels in Each K-means Cluster'
+)
+```
+<img src="/images/189_hw1_3.png" alt="label_plot" />
+
+上面的数据操作有点烦人, 一不小心就会写错, 这其实是一个类似于`pivot`的操作, 经过groupby(["cluster","label"]).size()之后会有一个二级索引
+```
+    cluster  label
+    0        0         50
+             1         12
+             2         5
+    1        0         10
+             2         80
+    ...
+```
+
+unstack之后会把内层索引`index`变成列名, 这就创建了`(cluster,label)`到`count`的一一映射, 然后就可以画图了
+```
+cluster  label0  label1  label2  
+0        50      12      5       
+1        10      80      0       
+...
+```
+这样一来`count`就成了没名字的元素了
+
+## Problem 2c
+在每个Cluster里面随机抽出7个图片, 把他们打出来
+
+```python
+# TODO: Plot 7 images from each cluster (use the show_images function, 10 rows, 7 columns)
+Cluster_Head=kmeans_df.groupby('cluster').sample(n=7,random_state=SEED)
+
+fig = show_images(Cluster_Head["image"].tolist(), ncols=7, labels=Cluster_Head["cluster"].tolist(),reshape=True,max_images=70)
+fig.show()
+
+# Cluster_Head
+```
+<img src="/images/189_hw1_4.png" alt="label_plot" />
+可以看到聚类的效果还是不错的, 至少没把衣服和鞋子放一起去
+
