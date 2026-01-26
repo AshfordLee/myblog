@@ -1,0 +1,270 @@
+---
+title: 'UC Berkeley CS189 Assignment 1(Part 1)'
+description: 'CS189 Assignment1 Notes'
+publishDate: '2026-1-26'
+tags: ['CS189']
+# heroImage: { src: './thumbnail.jpg', alt: '作业封面图片' }
+# heroImage: {}
+language: '中文'
+draft: false
+---
+
+import { Card, Button } from 'astro-pure/user'
+
+# CS189 Assignment1
+
+189这门课感觉也是理论和实践并行教学, Written Part的作业也不少, 不过比起336那种工程性质极强的课程来说还是容易不少, 至少这第一个Assignment没有和336那样, 一上来就整一大堆手搓, 189的作业基本上就是理解原来并调包, 极少的自己实现, 非常适合有志于成为API工程师的人学习
+
+Written Part的数学作业也并不容易, 后面有机会写一些Notes
+
+
+## 作业要求
+
+基本上是Fill in the Blanks性质的Lab, 把函数里面的所有TODO填满就行了, 几乎不需要自己设计接口
+
+## 评测框架
+
+用的是UC Berkeley自行设计的`otter`框架, 一键安装就行了:
+```bash
+pip install otter-grader
+```
+
+## 环境配置
+
+每个`hw`文件当中都给了`requirements.txt`, 直接安装就行
+```bash
+pip install -r requirements.txt
+```
+
+除此之外就是配置一下网络环境, 由于我是在GPU服务器上运行的, 所以一些没找到镜像站的数据下载代码我就用反向ssh端口让他走我本地的代理, 打开本地终端开启这个反向ssh:
+```bash
+(base) liziyu@liziyudeMacBook-Pro ~ % ssh -R 7891:localhost:7890 zyli@lab
+Welcome to Ubuntu 24.04.3 LTS (GNU/Linux 6.14.0-29-generic x86_64)
+
+ * Documentation:  https://help.ubuntu.com
+ * Management:     https://landscape.canonical.com
+ * Support:        https://ubuntu.com/pro
+
+Expanded Security Maintenance for Applications is not enabled.
+
+124 updates can be applied immediately.
+To see these additional updates run: apt list --upgradable
+
+Enable ESM Apps to receive additional future security updates.
+See https://ubuntu.com/esm or run: sudo pro status
+
+*** System restart required ***
+Last login: Fri Jan 23 15:16:55 2026 from 61.169.135.222
+(base) zyli@lab:~$ 
+```
+
+然后在notebook里面通过os来配置一下端口:
+```python
+import os
+where="lab"
+# where="local"
+
+if where=="lab":
+
+    os.environ['HTTP_PROXY'] = 'http://localhost:7891'
+    os.environ['HTTPS_PROXY'] = 'http://localhost:7891'
+```
+
+这里其实是比较烦的, 我本人还是喜欢去运行py文件, 用`ALL_PROXY=localhost:7891`的形式去做
+
+## Assignment Overview
+第一部分的所有代码在`fashion_pt_1.ipynb`里面, 都是一些比较基础的`pandas`和`numpy`的操作, 还有一些画图之类的, 主要就是让学习者习惯数据预处理
+
+## 加载`Fashion-MNIST`数据集
+
+搞清楚数据集本身作为一个对象有什么属性就行
+```python
+# Load the FashionMNIST dataset from torchvision
+train_data = torchvision.datasets.FashionMNIST(root='./data', train=True, download=True)
+
+# Extract the image data and convert it to a numpy array of type float
+images = train_data.data.numpy().astype(float)
+
+# Extract the target labels as a numpy array
+targets = train_data.targets.numpy()
+
+# Create a dictionary mapping class indices to class names
+class_dict = {i: class_name for i, class_name in enumerate(train_data.classes)}
+
+# Map the target labels to their corresponding class names
+labels = np.array([class_dict[t] for t in targets])
+
+# Create a list of class names in order of their indices
+class_names = [class_dict[i] for i in range(len(class_dict))]
+
+# Get the total number of samples in the dataset
+n = len(images)
+
+# Ensure class_names is a list of class names (redundant but ensures consistency)
+class_names = list(class_dict.values())
+
+# Print dataset information for verification
+print("Loaded FashionMNIST dataset with {} samples.".format(n))
+print("Classes: {}".format(class_dict))
+print("Image shape: {}".format(images[0].shape))  # Shape of a single image
+print("Image dtype: {}".format(images[0].dtype))  # Data type of the image array
+print("Image type: {}".format(type(images[0])))   # Type of the image object
+```
+
+```
+Loaded FashionMNIST dataset with 60000 samples.
+Classes: {0: 'T-shirt/top', 1: 'Trouser', 2: 'Pullover', 3: 'Dress', 4: 'Coat', 5: 'Sandal', 6: 'Shirt', 7: 'Sneaker', 8: 'Bag', 9: 'Ankle boot'}
+Image shape: (28, 28)
+Image dtype: float64
+Image type: <class 'numpy.ndarray'>
+```
+
+## Problem 0a
+从数据集的两列`numpy.series`:`images`和`targets`构造`DataFrame`
+```python
+# TODO: Create a DataFrame with two columns: `image` and `label`
+
+...
+image_list=images.tolist()
+label_list=labels.tolist()
+
+df=pd.DataFrame({'image':image_list,'label':label_list})
+df['image']=df['image'].apply(np.array)
+
+# Print the shape and columns of the DataFrame
+print("DataFrame shape:", df.shape)
+print("DataFrame columns:", df.columns.tolist())
+df.head()
+```
+```
+DataFrame shape: (60000, 2)
+DataFrame columns: ['image', 'label']
+
+```
+
+## Problem 1a
+计算数据集每个`label`出现的个数, 然后看每个`label`出现的个数是否相等
+```python
+# TODO: Calculate the distribution of labels using `value_counts()``
+# TODO: Compare the min and max values of `label_distribution` to determine if the dataset is balanced. 
+
+label_distribution=df['label'].value_counts()
+is_balanced=label_distribution.min()==label_distribution.max()
+
+print(f"Label distribution:\n{label_distribution}")
+print(f"Is the dataset balanced? {is_balanced}")
+```
+
+```
+Label distribution:
+label
+Ankle boot     6000
+T-shirt/top    6000
+Dress          6000
+Pullover       6000
+Sneaker        6000
+Sandal         6000
+Trouser        6000
+Shirt          6000
+Coat           6000
+Bag            6000
+Name: count, dtype: int64
+Is the dataset balanced? True
+```
+
+## Problem 1b
+用`groupby()`分组并且统计每个组的行数
+
+```python
+# TODO: Group the rows in `df` according to the values in the `labels` column. Then, count the number of rows in each group.
+label_distribution_groupby = df.groupby('label').size()
+
+label_distribution_groupby
+```
+
+```
+label
+Ankle boot     6000
+Bag            6000
+Coat           6000
+Dress          6000
+Pullover       6000
+Sandal         6000
+Shirt          6000
+Sneaker        6000
+T-shirt/top    6000
+Trouser        6000
+dtype: int64
+```
+
+## Problem 1c 
+对label列进行可视化
+
+```python
+# Plotting library to use, default is matplotlib but plotly has more functionality
+pd.options.plotting.backend = "plotly" 
+
+# TODO: Plot a histogram of the labels in the DataFrame `df` using the DataFrame's built-in plotting functions (this should be 1 line)
+df['label'].plot(kind="hist")
+```
+<img src="/images/189_hw1_1.png" alt="label_plot" />
+
+课程组还给了一个`show_images`函数, 他会打出图片和`label`
+```python
+def show_images(images, max_images=40, ncols=5, labels = None, reshape=False):
+    """Visualize a subset of images from the dataset.
+    Args:
+        images (np.ndarray or list): Array of images to visualize [img,row,col].
+        max_images (int): Maximum number of images to display.
+        ncols (int): Number of columns in the grid.
+        labels (np.ndarray, optional): Labels for the images, used for facet titles.
+    Returns:
+        plotly.graph_objects.Figure: A Plotly figure object containing the images.
+    """
+    if isinstance(images, list):
+        images = np.stack(images)
+    n = min(images.shape[0], max_images) # Number of images to show
+    px_height = 220 # Height of each image in pixels
+    if reshape:
+        images = images.reshape(images.shape[0], 28, 28)
+    fig = px.imshow(images[:n, :, :], color_continuous_scale='gray_r', 
+                    facet_col = 0, facet_col_wrap=ncols,
+                    height = px_height * int(np.ceil(n/ncols)))
+    fig.update_layout(coloraxis_showscale=False)
+    fig.update_xaxes(showticklabels=False, showgrid=False)
+    fig.update_yaxes(showticklabels=False, showgrid=False)
+    if labels is not None:
+        # Extract the facet number and replace with the label.
+        fig.for_each_annotation(lambda a: a.update(text=labels[int(a.text.split("=")[-1])]))
+    return fig
+```
+后面会用到
+
+## Problem 1d
+用`groupby`分类, 然后在每个分类里面挑两张图, 打印出图和他的分类
+```python
+# TODO: Get 2 sample images per class and plot them.
+examples = df.groupby('label').head(2)
+
+fig = show_images(examples["image"].tolist(), ncols=4, labels=examples["label"].tolist())
+fig.show()
+```
+
+<img src="/images/189_hw1_2.png" alt="label_plot" />
+
+## Problem 2
+用`reshape`函数把一个`m*n`的图像变成`mn*1`的
+```python
+df["image"] = df["image"].apply(lambda img: img.reshape(-1))
+```
+原始的每行的`image`元素都是`28*28`的, 现在每行都变成`784*1`的了
+
+```python
+np.stack(df['image'].values).shape
+```
+
+```
+(60000, 784)
+```
+
+这里说一下这个`np.stack(arrays, axis, out)`的用法, 以前每次都是AI
