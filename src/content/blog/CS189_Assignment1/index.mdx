@@ -681,3 +681,161 @@ fig.show()
 <img src="/images/189_hw1_11.png" alt="label_plot" />
 
 可以看到, 就算置信度很高, 也会有非常离谱的错误, 比如说把一个人分类成裤子, 从结果去理解过程, 我觉得他识别出的特征是两条裤腿
+
+
+## Problem 4
+
+这一部分作业要求我们实现各种各样的图像增强, 我个人觉得这是比较难的部分, 因为这一段的`numpy`调用很多, 一不小心就不记得数据处理成什么样了
+
+首先实现一些功能函数, 在高等代数里面学过, 很多变换(线性)都可以通过矩阵乘法来表示, 所以实现这个应用变换的函数
+
+```python
+def apply_transformation(image, T):
+    # Input: A (N, 784) image vector and a (784, 784) transformation matrix
+    # Output: A (N, 784) image vector
+    transformed_flat = image @ T.T
+    return transformed_flat.reshape(image.shape)
+```
+
+即将变换矩阵作用在图像上, 得到新图像
+
+接下来是一个例子, 告诉我们如何实现图像的上下颠倒
+
+```python
+def create_vertical_flip_matrix(height=28, width=28):
+    """
+    Returns a (height*width, height*width) matrix that vertically flips an image
+    when applied to its flattened vector. Values are 0 or 1.
+    """
+    N = height * width  # Total number of pixels in the image
+    T = np.zeros((N, N), dtype=int)  # Initialize the transformation matrix with zeros
+    for i in range(height):  # Loop over each row
+        for j in range(width):  # Loop over each column
+            orig_idx = i * width + j  # Compute the flattened index for the original pixel
+            flipped_i = height - 1 - i  # Compute the row index after vertical flip
+            flipped_idx = flipped_i * width + j  # Compute the flattened index for the flipped pixel
+            # Set the corresponding entry in the transformation matrix to 1
+            # This means the pixel at (i, j) moves to (flipped_i, j)
+            T[flipped_idx, orig_idx] = 1
+    return T
+
+def vertical_flip(image):
+    T_flip = create_vertical_flip_matrix()
+    return apply_transformation(image, T_flip)
+```
+
+上下颠倒只改变行, 不改变列, 实际上就是把第`i`行映射到`height-1-i`行
+
+```python
+test_image = np.load("test_image.npy")
+
+flipped_image = vertical_flip(test_image)
+show_images(np.stack([test_image, flipped_image]), labels=['Original', 'Flipped'], reshape=True)
+```
+
+<img src="/images/189_hw1_12.png" alt="label_plot" />
+
+这里要说一下, 这个变换矩阵`T`的尺寸是`N*N`, 其中`N=height*width`, 可以理解为`height*width`个像素点, 每个像素点从`i*width + j`被映射到`(height-1-i)*width + j`
+
+
+## Problem 4a
+要实现水平翻转, 依葫芦画瓢而已, 行不变, 列从`j`变成`width - 1 - j`, 所以每个元素`i*width + j`变到`i*width + (width - 1 - j)`
+
+```python
+def create_horizontal_flip_matrix(height=28, width=28):
+    """
+    Returns a (height*width, height*width) matrix that horizontally flips an image
+    when applied to its flattened vector. Values are 0 or 1.
+    """
+    N = height * width
+    T = np.zeros((N, N), dtype=int)
+    for i in range(height):
+        for j in range(width):
+            orig_idx = i * width + j
+            flipped_j = width - 1 - j
+            flipped_idx = i * width + flipped_j
+            T[flipped_idx, orig_idx] = 1
+    return T
+
+    
+def horizontal_flip(image):
+    T_flip = create_horizontal_flip_matrix()
+    return apply_transformation(image, T_flip)
+
+flipped_image = horizontal_flip(test_image)
+
+show_images(np.stack([test_image, flipped_image]), labels=['Original', 'Horizontal Flipped'], reshape=True)
+```
+
+<img src="/images/189_hw1_13.png" alt="label_plot" />
+
+## Problem 4b 
+要求实现图像的Shift移动, 想象一下, 如果是水平移动, 那就是列`j`被映射到`j + dx`(先不考虑左右的符号问题), 所以每个像素点从`i*width + j`被映射到`i*width + j + dx`
+
+
+这里有点小trick, 就是把x和y先flatten一下然后再移动
+
+```python
+def create_shift_matrix(dx, dy, height=28, width=28):
+    """
+    Create a transformation matrix for shifting an image by dx pixels horizontally and dy pixels vertically.
+
+    Args:
+        dx (int): Number of pixels to shift horizontally.
+        dy (int): Number of pixels to shift vertically.
+        height (int): Height of the image.
+        width (int): Width of the image.
+
+    Returns:
+        np.ndarray: A (height*width, height*width) transformation matrix for shifting.
+    """
+    N = height * width
+    T = np.zeros((N, N))
+    yy, xx = np.meshgrid(np.arange(height), np.arange(width), indexing='ij')
+    yy_flat = yy.ravel()
+    xx_flat = xx.ravel()
+
+    y_shift = yy_flat + dy
+    x_shift = xx_flat + dx
+
+    valid = (
+        (y_shift >= 0) & (y_shift < height) &
+        (x_shift >= 0) & (x_shift < width)
+    )
+
+    src = yy_flat[valid] * width + xx_flat[valid]
+    dst = y_shift[valid] * width + x_shift[valid]
+
+    T[dst, src] = 1.0
+
+    return T
+
+
+def shift_image(image, dx, dy):
+    """
+    Shift an image by dx pixels horizontally and dy pixels vertically.
+
+    Args:
+        image (np.ndarray): Flattened image array of shape (height*width,).
+        dx (int): Number of pixels to shift horizontally.
+        dy (int): Number of pixels to shift vertically.
+
+    Returns:
+        np.ndarray: Shifted image as a flattened array.
+    """
+    T = create_shift_matrix(dx, dy)
+    return apply_transformation(image, T)
+
+shifted_right_image = shift_image(test_image, 5, 0)
+shifted_left_image = shift_image(test_image, -5, 0)
+shifted_up_image = shift_image(test_image, 0, -5)
+shifted_down_image = shift_image(test_image, 0, 5)
+
+all_images = np.stack([test_image, shifted_up_image, shifted_down_image, shifted_right_image, shifted_left_image])
+plot_labels = ['Original', 'Shifted Up', 'Shifted Down', 'Shifted Right', 'Shifted Left']
+show_images(all_images, labels=plot_labels, reshape=True)
+```
+
+注意这上面的`xx` `yy`都有`height*weight`个元素, 他们本质上是所有元素的列坐标和行坐标, 所以说被flatten以后, 比如说`xx_flat + dx`就是对所有的列坐标都加上`dx`, 然后后面再用形如`i * width + height`的方式来还原
+
+<img src="/images/189_hw1_14.png" alt="label_plot" />
