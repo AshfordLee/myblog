@@ -354,3 +354,330 @@ fig.show()
 <img src="/images/189_hw1_4.png" alt="label_plot" />
 可以看到聚类的效果还是不错的, 至少没把衣服和鞋子放一起去
 
+## Problem 3
+ 
+训练一个MLP分类器, 总共四个步骤
+
+-  `数据预处理`
+-  `模型训练`
+-  `绩效评估`
+-  `可视化`
+
+先进行训练集和测试集的切分, 不能用`train_test_split`, 其实也很简单, 先sample出训练集, 那不在训练集里面的就是测试集
+```python
+df_copy = df.copy()
+train_df = df_copy.groupby('label').sample(frac=0.8, random_state=SEED)
+test_df = df_copy[~df_copy.index.isin(train_df.index)]
+print(f"Training set size: {len(train_df)}")
+print(f"Test set size: {len(test_df)}")
+```
+
+## Problem 3a
+
+展平并归一化数据点, 启动训练并且绘制损失曲线
+
+```python
+# flatten features into 1D arrays
+X_train = np.stack(train_df['image'].values)
+y_train = train_df['label'].values
+X_test = np.stack(test_df['image'].values)
+y_test = test_df['label'].values
+
+print(f"X_train shape: {X_train.shape}\t y_train shape: {y_train.shape}")
+print(f"X_test shape: {X_test.shape}\t y_test shape: {y_test.shape}")
+
+# TODO: Train the model using the scaled traning data and plott the loss curve (remeber to normalize your data!)
+# NOTE: Your model must be named `model`
+def flatten(images):
+    return images.reshape(images.shape[0], -1)
+image_scalar=StandardScaler()
+image_scalar.fit(flatten(X_train))
+X_train_sc=image_scalar.transform(flatten(X_train))
+X_test_sc=image_scalar.transform(flatten(X_test))
+
+if load_saved_models and os.path.exists('classifier.joblib'):
+
+    model = joblib.load('classifier.joblib')
+
+else:
+
+    model=MLPClassifier(
+    hidden_layer_sizes=(100, 50),
+    max_iter=200, tol=1e-4, random_state=SEED)
+
+    model.fit(X_train_sc,y_train)
+if save_models:
+    joblib.dump(model, 'classifier.joblib')
+
+loss_df=pd.DataFrame({'epoch':np.arange(1,len(model.loss_curve_)+1),'loss':model.loss_curve_})
+loss_df.plot(x='epoch', y='loss', title="Training Error")
+```
+
+从原始的`DataFrame`里面拿数据出来的时候遵循先`stack`再`reshape`, 感觉很多时候脑子里面并没有对数据的具体形状有一个清晰的记忆, 尤其是在高维张量的情况下, 但是遵照这个去做一般不会出错
+
+```
+X_train shape: (48000, 784)	 y_train shape: (48000,)
+X_test shape: (12000, 784)	 y_test shape: (12000,)
+```
+
+<img src="/images/189_hw1_5.png" alt="label_plot" />
+
+## Problem 3b
+产生预测结果和Evaluation Metrics, 这里主要就是一些API的调用, 主要涉及到`Sklearn.model`的属性怎么用的问题
+
+```python
+# TODO: Add the columns listed above to `train_df` and `test_df`.
+train_df = train_df.copy()
+test_df = test_df.copy()
+
+train_predict=model.predict(X_train_sc)
+test_predict=model.predict(X_test_sc)
+```
+
+`model.predict`返回`(n_samples,)`的np数组, 所以他是可以直接和真实的label数组去进行比较的
+
+```python
+train_correct=(train_predict==y_train)
+test_correct=(test_predict==y_test)
+```
+
+分类模型本质上在预测概率, 对于每个class, 给出一个prob_class, 所以`model.predict_prob`会给出`(n_samples,n_classes)`的数组, 即对于每个样本的每个潜在分类给出一个概率
+
+```python
+train_probs=model.predict_proba(X_train_sc)
+test_probs=model.predict_proba(X_test_sc)
+```
+
+接下来还要得到每个样本的置信度, 实际上就是每个样本预测概率当中最大的那个概率, 通俗来说, 如果有十个候选类, 然后其中预测的最大概率是100%, 其他的类的概率都是0%, 那至少看起来是比较可信的
+```python
+train_confidence=np.max(train_probs,axis=1)
+test_confidence=np.max(test_probs,axis=1)
+```
+以上均得到`(n_samples,)`的数组
+
+接下来把这些贴回到原来的df上去
+
+```python
+train_probs_list=[list(probs) for probs in train_probs]
+test_probs_list=[list(probs) for probs in test_probs]
+
+train_df['predicted_label']=train_predict
+train_df['correct']=train_correct
+train_df['probs']=train_probs_list
+train_df['confidence']=train_confidence
+
+test_df['predicted_label']=test_predict
+test_df['correct']=test_correct
+test_df['probs']=test_probs_list
+test_df['confidence']=test_confidence
+```
+
+最后算一下准确率就行了
+
+```python
+print("--- Column Types ----")
+for col in train_df.columns:
+    val = train_df[col].iloc[0]
+    print(f"{col}: {type(val)}")
+print("-----------")
+
+
+train_accuracy = train_correct.sum()/len(train_correct)
+test_accuracy = test_correct.sum()/len(test_correct)
+
+print(f"Training accuracy: {train_accuracy:.3f}")
+print(f"Test accuracy: {test_accuracy:.3f}")
+```
+
+```
+--- Column Types ----
+image: <class 'numpy.ndarray'>
+label: <class 'str'>
+predicted_label: <class 'str'>
+correct: <class 'numpy.bool'>
+probs: <class 'list'>
+confidence: <class 'numpy.float64'>
+-----------
+Training accuracy: 0.993
+Test accuracy: 0.883
+```
+
+## Problem 3c
+分组查看准确率, 只要`groupby('label')['correct'].mean()`就可以得到每个类的准确率, 然后再把train和test两张表`concat`起来, 最后用`pivot`把它变成宽表即可
+
+```python
+# TODO: Calculate train and test accuracy per class 
+# TODO: Use class_accuracy to create a grouped bar chart of class accuracy for train and test
+
+train_class_acc=train_df.groupby('label')['correct'].mean().reset_index()
+train_class_acc['split']='train'
+
+test_class_acc=test_df.groupby('label')['correct'].mean().reset_index()
+test_class_acc['split']='test'
+
+all_df=pd.concat([train_class_acc,test_class_acc])
+
+class_accuracy=all_df[['split','label','correct']]
+# print(class_accuracy)
+
+class_accuracy_pivot=class_accuracy.pivot(index='label',columns='split',values='correct')
+print(class_accuracy_pivot)
+
+class_accuracy_pivot.plot(kind='bar',text_auto=True)
+```
+
+```
+split            test     train
+label                          
+Ankle boot   0.967500  0.998333
+Bag          0.966667  0.999792
+Coat         0.807500  0.993333
+Dress        0.888333  0.995208
+Pullover     0.810000  0.990208
+Sandal       0.945833  0.998958
+Shirt        0.737500  0.990833
+Sneaker      0.932500  0.996458
+T-shirt/top  0.802500  0.967083
+Trouser      0.975833  0.997917
+```
+
+<img src="/images/189_hw1_6.png" alt="label_plot" />
+
+## Problem 3d
+计算不同类别之间的预测效果, 首先要用np算一个`10*10`的`confusion matrix`, 行代表真实label, 列代表预测label, 每个元素代表这种预测的个数, 显然, 对角线上的元素求和就是总共预测对的数量
+
+```python
+# Initialize confusion matrix with zeros
+conf_matrix = np.zeros((len(class_names), len(class_names)), dtype=int)
+class_to_idx = {class_name: idx for idx, class_name in enumerate(class_names)}
+
+# Fill the confusion matrix by counting predictions and plot it as a heatmap
+y_true=test_df['label'].values
+y_pred=test_df['predicted_label'].values
+
+true_indices = np.array([class_to_idx[label] for label in y_true])
+pred_indices = np.array([class_to_idx[label] for label in y_pred])
+
+np.add.at(conf_matrix, (true_indices, pred_indices), 1)
+
+fig=px.imshow(conf_matrix,
+                labels=dict(x="Predicted Label", y="True Label", color="Count"),
+                x=class_names,
+                y=class_names,
+                )
+
+fig.show()
+```
+实际上就是遍历一遍真实label和预测label, 注意要把label的名字转成int, 然后对矩阵的`(int,int)`加一就好了
+
+<img src="/images/189_hw1_7.png" alt="label_plot" />
+
+```python
+conf_matrix
+```
+
+```
+array([[ 963,    0,   23,   31,    1,    4,  171,    0,    7,    0],
+       [   4, 1171,    4,   15,    1,    0,    4,    0,    1,    0],
+       [  20,    2,  972,   14,  102,    0,   86,    0,    4,    0],
+       [  27,    5,   19, 1066,   37,    1,   43,    0,    2,    0],
+       [   7,    1,  112,   28,  969,    0,   79,    0,    4,    0],
+       [   2,    0,    0,    3,    0, 1135,    0,   35,    5,   20],
+       [ 118,    2,   96,   19,   71,    0,  885,    1,    8,    0],
+       [   0,    0,    0,    0,    0,   24,    0, 1119,    1,   56],
+       [   6,    1,    5,    2,    7,    4,   12,    2, 1160,    1],
+       [   0,    0,    0,    0,    0,   10,    0,   27,    2, 1161]])
+```
+
+接下来需要计算FP, FN, TP指标, 直接在这个矩阵上操作即可, 只需要注意对角线上是对的, 其他的都是错的
+
+```python
+# Calculate accuracy from confusion matrix
+accuracy_from_matrix = np.trace(conf_matrix)/np.sum(conf_matrix)
+print(f"\nAccuracy calculated from confusion matrix: {accuracy_from_matrix:.3f}")
+
+# Calculate per-class metrics from confusion matrix
+per_class_metrics = []
+print("\nPer-class metrics from confusion matrix:")
+for i, class_name in enumerate(class_names):
+    true_positives = conf_matrix[i][i]
+    false_positives = np.sum(conf_matrix[:,i])-conf_matrix[i][i]
+    false_negatives = np.sum(conf_matrix[i,:])-conf_matrix[i][i]
+    precision = true_positives / (true_positives + false_positives) if (true_positives + false_positives) > 0 else 0.0
+    recall = true_positives / (true_positives + false_negatives) if (true_positives + false_negatives) > 0 else 0.0
+    per_class_metrics.append({
+        'class': class_name,
+        'precision': precision,
+        'recall': recall
+    })
+    
+pd.DataFrame(per_class_metrics)
+```
+
+```
+Accuracy calculated from confusion matrix: 0.883
+
+Per-class metrics from confusion matrix:
+```
+<img src="/images/189_hw1_8.png" alt="label_plot" />
+
+
+
+## Problem 3f
+
+找出低置信度的预测并且plot出来
+
+```python
+# TODO: Find the image with the lowest confidence by sorting the `confidence` column of `test_df`
+least_confident = test_df.sort_values(by='confidence',ascending=True)
+print("Image with lowest confidence:")
+print(least_confident[['label', 'predicted_label', 'confidence', 'correct']][:3])
+
+# Show image with lowest confidence and its predicted label
+show_labels = [f"{label} (Pred: {predicted_label})" for label, predicted_label in zip(least_confident["label"].tolist(), least_confident["predicted_label"].tolist())]
+fig = show_images(np.stack(least_confident["image"].tolist()), 8, ncols=4, labels=show_labels, reshape=True)
+fig.show()
+```
+
+```
+Image with lowest confidence:
+         label predicted_label  confidence  correct
+20252     Coat           Shirt    0.385341    False
+23752  Sneaker      Ankle boot    0.395444    False
+18719  Sneaker      Ankle boot    0.396654    False
+```
+
+<img src="/images/189_hw1_9.png" alt="label_plot" />
+
+可以看到, 在置信度非常低的情况下, 很多都预测错了
+
+
+## Problem 3g
+
+找一些置信度很低但是预测对了的的Ankle boot类并画图, 非常容易, 先从`test_df`筛选出`label == 'Ankle boot' & correct == True`的, 然后用`show_images`画图就行了
+
+```python
+# TODO: Visualize 10 images from the `test_set` whose true label is `Ankle boot` that the model correctly classified but with low confidence
+test_df_boot = test_df[(test_df['label']=='Ankle boot')  &  (test_df['correct']==True)].sort_values(by='confidence',ascending=True).head(10)
+# 将 labels 转换为列表，或者使用 .tolist()
+show_labels = [f"{label} " for label in test_df_boot['label'].tolist()]
+fig = show_images(np.stack(test_df_boot["image"].tolist()), 10, ncols=5, labels=show_labels, reshape=True)
+
+fig.show()
+```
+<img src="/images/189_hw1_10.png" alt="label_plot" />
+
+
+## Problem 3l
+再找一些trouser类当中置信度很高但预测错误的画图, 和上面的一样, 照猫画虎即可
+```python
+# TODO: Visualize 10 images from the `test_set` whose true label is `Trouser` that the model incorrectly classified as `Dress` with high confidence
+test_df_trouser = test_df[(test_df['label']=='Trouser')  &  (test_df['correct']==False)].sort_values(by='confidence',ascending=False).head(10)
+show_labels = [f"{label} " for label in test_df_trouser['label'].tolist()]
+fig = show_images(np.stack(test_df_trouser["image"].tolist()), 10, ncols=5, labels=show_labels, reshape=True)
+
+fig.show()
+```
+<img src="/images/189_hw1_11.png" alt="label_plot" />
+
+可以看到, 就算置信度很高, 也会有非常离谱的错误, 比如说把一个人分类成裤子, 从结果去理解过程, 我觉得他识别出的特征是两条裤腿
