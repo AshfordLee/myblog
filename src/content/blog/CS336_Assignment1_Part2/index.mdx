@@ -1,0 +1,124 @@
+---
+title: 'Stanford CS336 Assignment 1(Part 2) - Transformer的实现'
+description: 'CS336 Assignment1 Notes'
+publishDate: '2026-1-28'
+tags: ['CS336']
+# heroImage: { src: './thumbnail.jpg', alt: '作业封面图片' }
+# heroImage: {}
+language: '中文'
+draft: true
+---
+
+import { Card, Button } from 'astro-pure/user'
+
+# CS336 Assignment 1
+
+Part1中我们实现了BPE分词器的算法以及`Tokenizer`类, 在Part2中我们将会手搓整个Transformer模型, 然后在Part3中我们会把前面的部分结合来真正的让这个模型开始训练
+
+<img src="/images/336_hw1/336_hw1_1.png" alt="label_plot" />
+
+## Transformer LM 简介
+
+### Token嵌入层 (Token Embedding)
+
+输入Transformer的内容是token id数字张量(显然不能是char), 形状为`(batch_size, sequence_length)`, 比如说`(2,2)`
+```python
+inputs = np.array([[2,0],[1,2]]) 
+```
+
+然后有一个可训练的矩阵E称之为嵌入矩阵, 这个矩阵回答这样一个问题: 对于每个输入的`token_id`(一维数字), 怎么把他送到高维空间？
+
+该矩阵形如:
+```python
+E = np.array([
+    [0.0, 0.0, 0.0],  # id = 0 (PAD/UNK)
+    [0.1, 0.2, 0.3],  # id = 1 Somewhere
+    [0.0, 0.5, 0.5],  # id = 2 over
+    [0.9, 0.1, 0.0],  # id = 3 the
+    [0.4, 0.4, 0.2],  # id = 4 rainbow
+    [0.7, 0.3, 0.6],  # id = 5 way
+    [0.2, 0.2, 0.9],  # id = 6 up
+    [0.6, 0.1, 0.4],  # id = 7 high
+])  # shape (V, d_model) -> here V=8, d_model=3
+```
+
+含义为: 将输入的`token_id`当中的0送到$$R^3$$上, 值为`[0.1,0.2,0.3]`, 至于这些`token_id`是哪里来的, 就是从之前训练好的`Vocab`训练而来的, 完整的流程如下
+
+这是我们输入的自然语言:
+```
+Somewhere over the rainbow way up high.
+```
+
+我们有训练好的词汇表`Vocab`:
+```
+{"Somewhere":1, "over",2, "the":3, "rainbow":4, "way":5, "up":6, "high":7}
+```
+
+首先自然语言被分割成
+```
+tokens = ["Somewhere","over","the","rainbow","way","up","high"]
+```
+
+然后通过词汇表被编码成
+```
+ids = [1,2,3,4,5,6,7]
+```
+
+接着对于`ids`里面的每一个`id`, 直接在`E`里面找到对应的行就可以了, 这就完成了Token Embeddings这个步骤
+
+
+### Pre-Norm Transformer块
+
+经过Embedding处理后的尺寸为`(batch_size, sequence_length, d_model)`的数据被送入Pre-Norm Transformer块当中, 处理完毕后的尺寸仍为`(batch_size, sequence_length, d_model)`, 块内的组件是自注意力机制和前馈层
+
+### 输出的归一化
+
+在经过若干个Transformer块之后, 还要进行归一化, 再送入一个线性层做处理, 最后通过Softmax来输出概率logits来决定下一个词输出什么
+
+## Einstein算子标注
+显然在做矩阵乘法/张量乘法的时候, 我们是在某一个维度进行求和, 而那个维度在计算完成之后会消失, Einstein算子标注就是让我们显性的写出那个被求和/将消失的维度, 其他的维度就不管了
+
+我觉得这种张亮乘法其实类似于高维定积分, 当通过累次积分来计算重积分的时候, 显然要写好这一次是对什么变量进行积分, 这次积分完毕之后, 这个变量就不再存在
+
+$$
+\iiint_{V} f(x,y,z)\,dx\,dy\,dz = \iint_{V_1}\,dx\,dy \int_{V_2}f(x,y,z)\,dz
+$$
+
+后面那次积分的`dz`已经说明了这次的积分(视作特殊的求和)是对z这个变量的, 所以不会产生混淆
+
+来看一个Einstein标注的张量运算
+
+```python
+import torch
+from einops import rearrange, einsum
+## Basic implementation
+Y = D @ A.T
+# Hard to tell the input and output shapes and what they mean.
+# What shapes can D and A have, and do any of these have unexpected behavior?
+## Einsum is self-documenting and robust
+# D A -> Y
+Y = einsum(D, A, "batch sequence d_in, d_out d_in -> batch sequence d_out")
+## Or, a batched version where D can have any leading dimensions but A is constrained.
+Y = einsum(D, A, "... d_in, d_out d_in -> ... d_out")
+```
+
+这里我们对`d_in`这个维度求和, 求和后这个维度就消失掉了, 所以只需要在两个运算量里面都亮明这个维度, 算子就会自动求和
+
+再看一个例子
+```python
+images = torch.randn(64, 128, 128, 3) # (batch, height, width, channel)
+dim_by = torch.linspace(start=0.0, end=1.0, steps=10)
+## Reshape and multiply
+dim_value = rearrange(dim_by, "dim_value -> 1 dim_value 1 1 1") # 拓展维度, 注意1是可以任意添加的维度
+images_rearr = rearrange(images, "b height width channel -> b 1 height width channel") # 同上
+dimmed_images = images_rearr * dim_value
+## Or in one go:
+dimmed_images = einsum(
+images, dim_by,
+"batch height width channel, dim_value -> batch dim_value height width channel"
+)
+```
+
+注意一下广播的时候首先维度的数量要匹配, 其次每个维度的大小要么相等要么有一个是1, 而在Einstein标注下, 不足的维度会被自动填充并广播
+
+高维张量的乘法是不便想象的, 我觉得首先要明白需要的输出尺寸是多少, 然后再用Einstein标注去写好输入的尺寸, 不变的用`...`替代
