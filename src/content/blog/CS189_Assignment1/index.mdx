@@ -6,7 +6,7 @@ tags: ['CS189']
 # heroImage: { src: './thumbnail.jpg', alt: '作业封面图片' }
 # heroImage: {}
 language: '中文'
-draft: true
+draft: false
 ---
 
 import { Card, Button } from 'astro-pure/user'
@@ -207,7 +207,7 @@ pd.options.plotting.backend = "plotly"
 # TODO: Plot a histogram of the labels in the DataFrame `df` using the DataFrame's built-in plotting functions (this should be 1 line)
 df['label'].plot(kind="hist")
 ```
-<img src="/images/189_hw1_1.png" alt="label_plot" />
+<img src="/images/189_hw1/189_hw1_1.png" alt="label_plot" />
 
 课程组还给了一个`show_images`函数, 他会打出图片和`label`
 ```python
@@ -250,7 +250,7 @@ fig = show_images(examples["image"].tolist(), ncols=4, labels=examples["label"].
 fig.show()
 ```
 
-<img src="/images/189_hw1_2.png" alt="label_plot" />
+<img src="/images/189_hw1/189_hw1_2.png" alt="label_plot" />
 
 ## Problem 2
 用`reshape`函数把一个`m*n`的图像变成`mn*1`的
@@ -317,7 +317,7 @@ cluster_label_counts.plot(
     title='Distribution of True Labels in Each K-means Cluster'
 )
 ```
-<img src="/images/189_hw1_3.png" alt="label_plot" />
+<img src="/images/189_hw1/189_hw1_3.png" alt="label_plot" />
 
 上面的数据操作有点烦人, 一不小心就会写错, 这其实是一个类似于`pivot`的操作, 经过groupby(["cluster","label"]).size()之后会有一个二级索引
 ```
@@ -351,7 +351,7 @@ fig.show()
 
 # Cluster_Head
 ```
-<img src="/images/189_hw1_4.png" alt="label_plot" />
+<img src="/images/189_hw1/189_hw1_4.png" alt="label_plot" />
 可以看到聚类的效果还是不错的, 至少没把衣服和鞋子放一起去
 
 ## Problem 3
@@ -420,7 +420,7 @@ X_train shape: (48000, 784)	 y_train shape: (48000,)
 X_test shape: (12000, 784)	 y_test shape: (12000,)
 ```
 
-<img src="/images/189_hw1_5.png" alt="label_plot" />
+<img src="/images/189_hw1/189_hw1_5.png" alt="label_plot" />
 
 ## Problem 3b
 产生预测结果和Evaluation Metrics, 这里主要就是一些API的调用, 主要涉及到`Sklearn.model`的属性怎么用的问题
@@ -541,7 +541,7 @@ T-shirt/top  0.802500  0.967083
 Trouser      0.975833  0.997917
 ```
 
-<img src="/images/189_hw1_6.png" alt="label_plot" />
+<img src="/images/189_hw1/189_hw1_6.png" alt="label_plot" />
 
 ## Problem 3d
 计算不同类别之间的预测效果, 首先要用np算一个`10*10`的`confusion matrix`, 行代表真实label, 列代表预测label, 每个元素代表这种预测的个数, 显然, 对角线上的元素求和就是总共预测对的数量
@@ -570,7 +570,7 @@ fig.show()
 ```
 实际上就是遍历一遍真实label和预测label, 注意要把label的名字转成int, 然后对矩阵的`(int,int)`加一就好了
 
-<img src="/images/189_hw1_7.png" alt="label_plot" />
+<img src="/images/189_hw1/189_hw1_7.png" alt="label_plot" />
 
 ```python
 conf_matrix
@@ -619,7 +619,7 @@ Accuracy calculated from confusion matrix: 0.883
 
 Per-class metrics from confusion matrix:
 ```
-<img src="/images/189_hw1_8.png" alt="label_plot" />
+<img src="/images/189_hw1/189_hw1_8.png" alt="label_plot" />
 
 
 
@@ -647,7 +647,7 @@ Image with lowest confidence:
 18719  Sneaker      Ankle boot    0.396654    False
 ```
 
-<img src="/images/189_hw1_9.png" alt="label_plot" />
+<img src="/images/189_hw1/189_hw1_9.png" alt="label_plot" />
 
 可以看到, 在置信度非常低的情况下, 很多都预测错了
 
@@ -665,7 +665,7 @@ fig = show_images(np.stack(test_df_boot["image"].tolist()), 10, ncols=5, labels=
 
 fig.show()
 ```
-<img src="/images/189_hw1_10.png" alt="label_plot" />
+<img src="/images/189_hw1/189_hw1_10.png" alt="label_plot" />
 
 
 ## Problem 3l
@@ -678,7 +678,7 @@ fig = show_images(np.stack(test_df_trouser["image"].tolist()), 10, ncols=5, labe
 
 fig.show()
 ```
-<img src="/images/189_hw1_11.png" alt="label_plot" />
+<img src="/images/189_hw1/189_hw1_11.png" alt="label_plot" />
 
 可以看到, 就算置信度很高, 也会有非常离谱的错误, 比如说把一个人分类成裤子, 从结果去理解过程, 我觉得他识别出的特征是两条裤腿
 
@@ -687,7 +687,7 @@ fig.show()
 
 这一部分作业要求我们实现各种各样的图像增强, 我个人觉得这是比较难的部分, 因为这一段的`numpy`调用很多, 一不小心就不记得数据处理成什么样了
 
-首先实现一些功能函数, 在高等代数里面学过, 很多变换(线性)都可以通过矩阵乘法来表示, 所以实现这个应用变换的函数
+首先实现一些功能函数, 在高等代数里面学过(在此致敬电子科技大学何军华老师), 很多变换(线性)都可以通过矩阵乘法来表示, 所以实现这个应用变换的函数
 
 ```python
 def apply_transformation(image, T):
@@ -733,7 +733,7 @@ flipped_image = vertical_flip(test_image)
 show_images(np.stack([test_image, flipped_image]), labels=['Original', 'Flipped'], reshape=True)
 ```
 
-<img src="/images/189_hw1_12.png" alt="label_plot" />
+<img src="/images/189_hw1/189_hw1_12.png" alt="label_plot" />
 
 这里要说一下, 这个变换矩阵`T`的尺寸是`N*N`, 其中`N=height*width`, 可以理解为`height*width`个像素点, 每个像素点从`i*width + j`被映射到`(height-1-i)*width + j`
 
@@ -767,7 +767,7 @@ flipped_image = horizontal_flip(test_image)
 show_images(np.stack([test_image, flipped_image]), labels=['Original', 'Horizontal Flipped'], reshape=True)
 ```
 
-<img src="/images/189_hw1_13.png" alt="label_plot" />
+<img src="/images/189_hw1/189_hw1_13.png" alt="label_plot" />
 
 ## Problem 4b 
 要求实现图像的Shift移动, 想象一下, 如果是水平移动, 那就是列`j`被映射到`j + dx`(先不考虑左右的符号问题), 所以每个像素点从`i*width + j`被映射到`i*width + j + dx`
@@ -838,4 +838,624 @@ show_images(all_images, labels=plot_labels, reshape=True)
 
 注意这上面的`xx` `yy`都有`height*weight`个元素, 他们本质上是所有元素的列坐标和行坐标, 所以说被flatten以后, 比如说`xx_flat + dx`就是对所有的列坐标都加上`dx`, 然后后面再用形如`i * width + height`的方式来还原
 
-<img src="/images/189_hw1_14.png" alt="label_plot" />
+<img src="/images/189_hw1/189_hw1_14.png" alt="label_plot" />
+
+
+## Problem 4c
+
+要求实现一个类似于卷积核的东西, 关键是要搞清楚`src_idx`和`dst_idx`之间的关系, 还要搞清楚这个矩阵T的含义, 矩阵T有`weight*height`行, 每一行对应原矩阵的一个点, 而每一行的`weight*height`个点对应的是原矩阵的这一个点对总共的`weight*height`个点产生的影响
+
+举个例子:
+```
+0 1 2
+3 4 5
+6 7 8
+```
+
+原有矩阵是这样, 那么T的第一行就应该是:
+```
+[1/4, 1/4, 0,   1/4, 1/4, 0,   0,   0,   0  ],
+```
+
+这一行有9个点, 代表的就是对原矩阵9个点的影响, 我们假设`kernel_size = 3`, 那么生成的`(0,0)`处的元素应当是`(0+1+3+4)/4`, 也就是把原矩阵`Flatten`成行了之后和这一行(转置成列)做内积, 而那些没被影响的点, 在这一行里的数值自然就是0了
+
+```python
+def create_blur_matrix(kernel_size=3, height=28, width=28):
+    """
+    Create a transformation matrix T that applies a uniform mean blur using a centered, odd-sized square sliding window.
+
+    For each output pixel (i, j):
+      1) Place a `kernel_size × kernel_size` window centered at (i, j).
+      2) If the window is outside the image, then it will have fewer neighbors (only average the pixels that exist)
+
+    Args:
+        kernel_size (int): Size of the square kernel (must be odd).
+        height (int): Height of the image.
+        width (int): Width of the image.
+
+    Returns:
+        np.ndarray: A (height*width, height*width) transformation matrix for blurring.
+    """
+    N = height * width
+    T = np.zeros((N, N))
+    pad = kernel_size // 2
+    kernel_area = kernel_size * kernel_size
+    # Each pixel contributes equally to a kernel's neighborhood
+    for i in range (height):
+        for j in range (width):
+            col_start=max(0,j-pad)
+            row_start=max(0,i-pad)
+            col_end=min(width-1,j+pad)
+            row_end=min(height-1,i+pad)
+
+            valid_count=(row_end-row_start+1)*(col_end-col_start+1)
+            arg_value=1.0/valid_count
+
+            dst_idx=i*width+j
+            for r in range(row_start,row_end+1):
+                for c in range(col_start,col_end+1):
+                    src_idx=r*width+c
+                    T[dst_idx,src_idx]=arg_value
+    return T
+```
+
+可以看到一个`i`和`j`确定了唯一的`dst_idx`, 这个变量名没太起好, 这其实是原矩阵的`(i,j)`点, 那么在T当中他要占一整行, 而一整行每个被影响的点都是`1/count`, 影响不到的(窗口外的)自然就是0了
+
+应用并画图
+```python
+def blur_image(image, kernel_size=3):
+    """
+    Apply a blur transformation to a flattened image array or a batch of flattened images.
+
+    Args:
+        image (np.ndarray): Flattened image array of shape (height*width,) or batch of images (N, height*width).
+        kernel_size (int): Size of the square kernel to use for blurring.
+
+    Returns:
+        np.ndarray: Blurred image(s) as a flattened array or batch of arrays.
+    """
+    T = create_blur_matrix(kernel_size)
+    return apply_transformation(image, T)
+
+blurred_1x1 = blur_image(test_image, kernel_size=1)
+blurred_3x3 = blur_image(test_image, kernel_size=3)
+blurred_5x5 = blur_image(test_image, kernel_size=5)
+
+blurred_images = [test_image, blurred_1x1, blurred_3x3, blurred_5x5]
+blurred_labels = ['Original', 'Blur 1x1', 'Blur 3x3', 'Blur 5x5']
+
+show_images(blurred_images, labels=blurred_labels, reshape=True)
+```
+
+<img src="/images/189_hw1/189_hw1_14.png" alt="label_plot" />
+
+
+
+## Problem 4d
+
+要求实现图像旋转矩阵
+
+这里的核心是根据$$\theta$$生成的旋转变换2*2矩阵
+
+$$
+R(\theta) =
+\begin{pmatrix}
+\cos\theta & -\sin\theta \\
+\sin\theta & \cos\theta
+\end{pmatrix}
+$$
+
+根据一年级的解析几何课程知识(在此致敬电子科技大学余时伟老师), 点`(x,y)`如果围绕原点$$\theta$$旋转得到的`(x',y')`满足:
+
+$$
+\begin{pmatrix} x' \\[4pt] y' \end{pmatrix}
+=
+\begin{pmatrix}
+\cos\theta & -\sin\theta \\
+\sin\theta & \cos\theta
+\end{pmatrix}
+\begin{pmatrix} x \\[4pt] y \end{pmatrix}
+
+$$
+
+更一般的如果是围绕`(x_0,y_0)`进行旋转, 只要搞清楚本质上是向量再旋转就行, 所以满足:
+
+
+
+$$
+\begin{pmatrix} x' \\[4pt] y' \end{pmatrix}
+=
+\begin{pmatrix}
+\cos\theta & -\sin\theta \\
+\sin\theta & \cos\theta
+\end{pmatrix}
+\begin{pmatrix} x - x_0 \\[4pt] y - y_0 \end{pmatrix}
++
+\begin{pmatrix} x_0 \\[4pt] y_0 \end{pmatrix}
+$$
+
+```python
+def create_rotation_matrix(theta, height=28, width=28):
+    """
+    Create a transformation matrix for rotating an image by theta degrees.
+
+    Args:
+        theta (float): Angle of rotation in degrees.
+        height (int): Height of the image.
+        width (int): Width of the image.
+
+    Returns:
+        np.ndarray: A (height*width, height*width) transformation matrix for rotating.
+    """
+    # Convert theta from degrees to radians
+    theta = np.deg2rad(theta)
+    N = height * width
+    T = np.zeros((N, N))
+    center_i = (height - 1) / 2.0
+    center_j = (width - 1) / 2.0
+
+    cos_theta = np.cos(theta)
+    sin_theta = np.sin(theta)
+    
+    for src_i in range(height):
+        for src_j in range(width):
+
+            src_i_centered = src_i - center_i
+            src_j_centered = src_j - center_j
+            
+            # 旋转（逆时针旋转theta）
+            dst_i_centered = src_i_centered * cos_theta - src_j_centered * sin_theta
+            dst_j_centered = src_i_centered * sin_theta + src_j_centered * cos_theta
+            
+            # 平移回去
+            dst_i = dst_i_centered + center_i
+            dst_j = dst_j_centered + center_j
+            
+            # 取整并检查边界
+            dst_i_int = int(np.round(dst_i))
+            dst_j_int = int(np.round(dst_j))
+            
+            if 0 <= dst_i_int < height and 0 <= dst_j_int < width:
+                src_idx = src_i * width + src_j
+                dst_idx = dst_i_int * width + dst_j_int
+                T[dst_idx, src_idx] = 1.0
+
+    return T
+
+
+def rotate_image(image, theta):
+    """
+    Apply a rotation transformation to a flattened image array or a batch of flattened images.
+
+    Args:
+        image (np.ndarray): Flattened image array of shape (height*width,) or batch of images (N, height*width).
+        theta (float): Angle of rotation in degrees.
+
+    Returns:
+        np.ndarray: Rotated image(s) as a flattened array or batch of arrays.
+    """
+    T = create_rotation_matrix(theta)
+    return apply_transformation(image, T)
+
+# rotate with matrix
+rotated_45 = rotate_image(test_image, 45) 
+rotated_90 = rotate_image(test_image, 90)
+rotated_200 = rotate_image(test_image, 200)
+rotated_270 = rotate_image(test_image, 270)
+
+# visualize original and 4 augmentations in plotly image grid
+all_images = np.stack([test_image, rotated_45, rotated_90, rotated_200, rotated_270])
+plot_labels = ['Original', 'Rotated (45°)', 'Rotated (90°)', 'Rotated (200°)', 'Rotated (270°)']
+show_images(all_images, labels=plot_labels, reshape=True)
+```
+
+这里的映射关系就是:
+```
+(i, j) -> (dst_i, dst_j)
+```
+
+再构造出两边的`src_idx`和`dst_idx`即可, 注意这个T在`apply_transformation`的时候要转置的, 所以在填充T的时候永远是`T[dst_idx, src_idx]`, 转置之后就变成`T[src_idx, dst_idx]`
+
+<img src="/images/189_hw1/189_hw1_16.png" alt="label_plot" />
+
+
+## Problem 4e
+
+要求实现逆旋转变换和双线性插值, 首先考虑逆变换`(x_0,y_0)`到`(x,y)`
+
+$$
+\begin{pmatrix} x \\[4pt] y \end{pmatrix}
+=
+\begin{pmatrix}
+\cos\theta & \sin\theta \\
+-\sin\theta & \cos\theta
+\end{pmatrix}
+\begin{pmatrix} x' - x_0 \\[4pt] y' - y_0 \end{pmatrix}
++
+\begin{pmatrix} x_0 \\[4pt] y_0 \end{pmatrix}
+$$
+
+$$
+x = \cos\theta\,(x' - x_0) + \sin\theta\,(y' - y_0) + x_0
+$$
+
+$$
+y = -\sin\theta\,(x' - x_0) + \cos\theta\,(y' - y_0) + y_0
+$$
+
+```python
+def create_bilinear_rotation_matrix(theta, height=28, width=28):
+    """
+    Create a (height*width, height*width) matrix that applies bilinear interpolation
+    for rotating a flattened image by theta degrees.
+    Each row of the matrix gives the weights for the input pixels that contribute to each output pixel.
+
+    Args:
+        theta (float): Angle of rotation in degrees.
+        height (int): Height of the image.
+        width (int): Width of the image.
+
+    Returns:
+        np.ndarray: A (height*width, height*width) transformation matrix for rotating.
+    """
+    theta = np.deg2rad(theta)
+    N = height * width
+    T = np.zeros((N, N))
+    center_i = (height - 1) / 2.0
+    center_j = (width - 1) / 2.0
+    cos_theta = np.cos(-theta)
+    sin_theta = np.sin(-theta)
+
+    for i in range(height):  # Loop over rows of the output image
+        for j in range(width):  # Loop over columns of the output image
+            output_idx = i * width + j
+
+            # Translate output pixel to be relative to the center
+            centered_j = j - center_j
+            centered_i = i - center_i
+
+            # Apply the inverse rotation to find the original pixel coordinates
+            original_j_rotated = centered_j * cos_theta - centered_i * sin_theta
+            original_i_rotated = centered_j * sin_theta + centered_i * cos_theta
+
+            # Translate back to original image coordinates
+            original_j = original_j_rotated + center_j
+            original_i = original_i_rotated + center_i
+
+            # Bilinear interpolation
+            # Find the 4 nearest neighbor pixels
+            j_floor = int(np.floor(original_j))
+            i_floor = int(np.floor(original_i))
+            j_ceil = int(np.ceil(original_j))
+            i_ceil = int(np.ceil(original_i))
+
+            # Calculate the fractional distances
+            dj = original_j - j_floor
+            di = original_i - i_floor
+
+            # Define the weights
+            w_tl = (1 - dj) * (1 - di)  # Top-left
+            w_tr = dj * (1 - di)      # Top-right
+            w_bl = (1 - dj) * di      # Bottom-left
+            w_br = dj * di          # Bottom-right
+
+            # Get the indices of the 4 neighbors, handling boundaries by setting weight to 0
+            neighbors = []
+            weights = []
+
+            # Top-left neighbor
+            if 0 <= i_floor < height and 0 <= j_floor < width:
+                neighbors.append(i_floor * width + j_floor)
+                weights.append(w_tl)
+
+            # Top-right neighbor
+            if 0 <= i_floor < height and 0 <= j_ceil < width:
+                neighbors.append(i_floor * width + j_ceil)
+                weights.append(w_tr)
+
+            # Bottom-left neighbor
+            if 0 <= i_ceil < height and 0 <= j_floor < width:
+                neighbors.append(i_ceil * width + j_floor)
+                weights.append(w_bl)
+
+            # Bottom-right neighbor
+            if 0 <= i_ceil < height and 0 <= j_ceil < width:
+                neighbors.append(i_ceil * width + j_ceil)
+                weights.append(w_br)
+
+            # Assign the weighted sum to the output pixel in the transformation matrix
+            for neighbor_idx, weight in zip(neighbors, weights):
+                T[output_idx, neighbor_idx] = weight
+    return T
+```
+
+首先这里遍历的其实是输出的image了, 不过尺寸还是一样的, 只要应用上面的矩阵变换就能得到原来的`original_j`和`original_i`, 也就是变换前的`y`和`x`
+
+注意由于是三角函数的数值变换, 这个`y`和`x`不一定是整数, 所以我们找它周边的四个点做双线性插值
+
+```python
+# Bilinear interpolation
+# Find the 4 nearest neighbor pixels
+j_floor = int(np.floor(original_j))
+i_floor = int(np.floor(original_i))
+j_ceil = int(np.ceil(original_j))
+i_ceil = int(np.ceil(original_i))
+
+# Calculate the fractional distances
+dj = original_j - j_floor
+di = original_i - i_floor
+```
+
+然后计算四个权重, 以竖着的距离为例, `x`到`i_floor`的距离是`di`, `x`到`i_ceil`的距离是`1-di`, 这是因为`i_floor`到`i_ceil`的距离是1
+
+```python
+# Define the weights
+w_tl = (1 - dj) * (1 - di)  # Top-left
+w_tr = dj * (1 - di)      # Top-right
+w_bl = (1 - dj) * di      # Bottom-left
+w_br = dj * di          # Bottom-right
+```
+
+接下来, 遍历这四个邻居点并且添加权重, 注意在一次遍历当中`output_idx`是已经被固定了的, 然后在T的属于`output_idx`的那一行里面, 至多有四个不为0的`weight`(如果`neighbor`出格了就不要了)
+
+```python
+# Top-left neighbor
+if 0 <= i_floor < height and 0 <= j_floor < width:
+    neighbors.append(i_floor * width + j_floor)
+    weights.append(w_tl)
+
+# Top-right neighbor
+if 0 <= i_floor < height and 0 <= j_ceil < width:
+    neighbors.append(i_floor * width + j_ceil)
+    weights.append(w_tr)
+
+# Bottom-left neighbor
+if 0 <= i_ceil < height and 0 <= j_floor < width:
+    neighbors.append(i_ceil * width + j_floor)
+    weights.append(w_bl)
+
+# Bottom-right neighbor
+if 0 <= i_ceil < height and 0 <= j_ceil < width:
+    neighbors.append(i_ceil * width + j_ceil)
+    weights.append(w_br)
+
+# Assign the weighted sum to the output pixel in the transformation matrix
+for neighbor_idx, weight in zip(neighbors, weights):
+    T[output_idx, neighbor_idx] = weight
+```
+
+应用更改
+
+```python
+def rotate_image_bilinear(image, theta):
+    """
+    Rotate an image using bilinear interpolation.
+
+    Args:
+        image (np.ndarray): Flattened image array of shape (height*width,) or batch of images (N, height*width).
+        theta (float): Angle of rotation in degrees.
+
+    Returns:
+        np.ndarray: Rotated image as a flattened array.
+    """
+    T = create_bilinear_rotation_matrix(theta)
+    return apply_transformation(image, T)
+    
+# rotate with matrix
+rotated = rotate_image(test_image, 45)
+rotated_interpolated = rotate_image_bilinear(test_image, 45)
+
+all_images = np.stack([test_image, rotated, rotated_interpolated])
+plot_labels = ['Original',  'Rotated 45°', 'Rotated 45° (Bilinear)']
+show_images(all_images, labels=plot_labels, reshape=True)
+```
+
+<img src="/images/189_hw1/189_hw1_17.png" alt="label_plot" />
+
+
+## Problem 4f
+实现复合变换, 假如我们有很多变换矩阵T在一个列表里面, 我们只需要遍历这个列表然后每次进行矩阵相乘就好了
+
+```python
+def compose_transforms(*Ts):
+  """
+  Compose linear image transforms (each 784x784).
+  Inputs:
+    Ts: list of transformation matrices
+  Returns:
+    T_total: composition of all input transformations
+  """
+  T_total = Ts[0]
+  for T in Ts[1:]:
+    T_total = np.dot(T, T_total)  # 注意：T @ T_total，不是 T_total @ T
+  return T_total
+```
+
+例如先旋转再模糊化处理:
+
+```python
+def rotate_then_blur(image, theta, kernel_size):
+  """
+  Rotate an image by theta degrees (without bilinear interpolation) and then blur it with a kernel of size kernel_size.
+  """
+
+
+  Rotate_Matrix=create_rotation_matrix(theta,height=28,width=28)
+  Blur_Matrix=create_blur_matrix(kernel_size=kernel_size,height=28,width=28)
+
+  T=compose_transforms(Rotate_Matrix,Blur_Matrix)
+
+
+  return apply_transformation(image,T)
+```
+
+以及先平移, 再旋转, 再模糊化处理
+```python
+def shift_then_rotate_then_blur(image, dx, dy, theta, kernel_size):
+  """
+  Shift an image by (dx, dy), then rotate it by theta degrees (without bilinear interpolation), and then blur it with a kernel of size kernel_size.
+  """
+  Shift_Matrix=create_shift_matrix(dx,dy,height=28,width=28)
+  Rotate_Matrix=create_rotation_matrix(theta,height=28,width=28)
+  Blur_Matrix=create_blur_matrix(kernel_size,height=28,width=28)
+  T=compose_transforms(Shift_Matrix,Rotate_Matrix,Blur_Matrix)
+  return apply_transformation(image,T)
+```
+
+```python
+rotated_blurred_image = rotate_then_blur(test_image, 45, 3)
+# shifted_rotated_blurred_image = shift_then_rotate_then_blur(test_image, 1, -4, 200, 5)
+shifted_rotated_blurred_image = shift_then_rotate_then_blur(test_image, 5, 5, 45, 5)
+
+all_images = np.stack([test_image, rotated_blurred_image, shifted_rotated_blurred_image])
+plot_labels = ['Original', 'Rotated 45° and Blurred 2x2', 'Shifted 5, Rotated 45° and Blurred 2x2']
+show_images(all_images, labels=plot_labels, reshape=True)
+```
+
+<img src="/images/189_hw1/189_hw1_18.png" alt="label_plot" />
+
+这个问题的测试没A过, 但是也没有看出来有什么问题
+
+## Problem 4h
+
+写一个接口来应用这些更改, 不需要什么技巧, 直接把变换的类型和参数存起来, 然后for循环一个一个应用即可
+
+```python
+# Test augmentation functions on a few examples
+test_images = np.stack(test_df['image'])
+test_labels = test_df['label']
+
+shift_inputs = [(5, 0), (-5, 0), (0, 5), (0, -5)]
+rotate_inputs = [45, 90, 200]
+blur_inputs = [3, 5]
+rotate_blur_inputs = [(45, 3), (90, 5)]
+shift_rotate_blur_inputs = [((5, 0), 45, 3), ((-5, 0), 90, 5)]
+
+augmented_data = []
+# Randomly sample 100 datapoints from test_images
+sample_idx = np.random.choice(len(test_images), 100, replace=False)
+test_images_sample = test_images[sample_idx]
+test_labels_sample = np.array(test_labels)[sample_idx]
+
+# TODO: Apply the augmentation functions we just created (shift, blur, rotate w/ bilinear, rotate then blur, shift then rotate then blur) to every image from test_images_sample
+# use the inputs defined above to apply the augmentations
+# Save the augmented images in a new DataFrame aug_df
+def add_augmented_sample(img, label, orig_idx, aug_name, aug_type, transform_fn):
+    augmented_data.append({
+        'original_idx': orig_idx,
+        'augmentation': aug_name,
+        'image': transform_fn(img).copy(),
+        'label': label,
+        'type': aug_type
+    })
+
+
+for orig_idx, img, label in zip(sample_idx, test_images_sample, test_labels_sample):
+    for dx, dy in shift_inputs:
+        add_augmented_sample(
+            img, label, orig_idx,f'shift_{dx}_{dy}', 'shift',
+            lambda x, dx=dx, dy=dy: shift_image(x, dx, dy)
+        )
+    for theta in rotate_inputs:
+        add_augmented_sample(
+            img, label, orig_idx,f'rotate_bilinear_{theta}', 'rotate',
+            lambda x, theta=theta: rotate_image_bilinear(x, theta)
+        )
+    for k in blur_inputs:
+        add_augmented_sample(
+            img, label, orig_idx,f'blur_{k}x{k}', 'blur',
+            lambda x, k=k: blur_image(x, kernel_size=k)
+        )
+    for theta, k in rotate_blur_inputs:
+        add_augmented_sample(
+            img, label, orig_idx,f'rotate_{theta}_blur_{k}', 'rotate_blur',
+            lambda x, theta=theta, k=k: rotate_then_blur(x, theta, k)
+        )
+    for (shift_pair, theta, k) in shift_rotate_blur_inputs:
+        dx, dy = shift_pair
+        add_augmented_sample(
+            img, label, orig_idx,f'shift_{dx}_{dy}_rotate_{theta}_blur_{k}', 'shift_rotate_blur',
+            lambda x, dx=dx, dy=dy, theta=theta, k=k: shift_then_rotate_then_blur(x, dx, dy, theta, k)
+        )
+
+
+aug_df = pd.DataFrame(augmented_data)
+
+# TODO: Select an image and visualize it with all the augmentations applied to it
+example_image = test_images_sample[0]
+
+example_variants = [('original', example_image)]
+for dx, dy in shift_inputs:
+    example_variants.append((f'shift_{dx}_{dy}', shift_image(example_image, dx, dy)))
+for theta in rotate_inputs:
+    example_variants.append((f'rot_bilin_{theta}', rotate_image_bilinear(example_image, theta)))
+for k in blur_inputs:
+    example_variants.append((f'blur_{k}x{k}', blur_image(example_image, kernel_size=k)))
+for theta, k in rotate_blur_inputs:
+    example_variants.append((f'rot_{theta}_blur_{k}', rotate_then_blur(example_image, theta, k)))
+for (shift_pair, theta, k) in shift_rotate_blur_inputs:
+    dx, dy = shift_pair
+    example_variants.append((f'shift_{dx}_{dy}_rot_{theta}_blur_{k}',
+                             shift_then_rotate_then_blur(example_image, dx, dy, theta, k)))
+
+example_imgs = np.stack([img for _, img in example_variants])
+example_labels = [name for name, _ in example_variants]
+
+fig = show_images(example_imgs, ncols=4, labels=example_labels, reshape=True)
+fig.show()
+```
+
+<img src="/images/189_hw1/189_hw1_19.png" alt="label_plot" />
+
+
+
+## Problem 4i
+
+把之前训练好的那个分类器在增强数据上测试, 评测一下效果, 也就是预处理一下数据, 把格式调成适配`model`的样子, 最后把效果画个图就好了
+
+```python
+from sklearn.metrics import accuracy_score
+
+
+def evaluate_augmented_data(aug_df, clf):
+    records = []
+
+    for aug_name, group in aug_df.groupby("augmentation"):
+        # 将图像堆叠成 3D/4D 数组，再 reshape 成模型需要的形状
+        images = np.stack(group["image"].to_numpy())
+        n_samples = images.shape[0]
+        X = images.reshape(n_samples, -1)
+
+        # 若模型需要标准化，这里先拟合再变换（或对训练集拟合后在此仅 transform）
+        scaler = StandardScaler()
+        X_scaled = scaler.fit_transform(X)
+
+        y_true = group["label"].to_numpy()
+        y_pred = clf.predict(X_scaled)
+        acc = accuracy_score(y_true, y_pred)
+
+        records.append({
+            "augmentation": aug_name,
+            "accuracy": acc,
+            "type": group["type"].iloc[0]
+        })
+
+    return pd.DataFrame(records)
+
+
+aug_performance = evaluate_augmented_data(aug_df, model)
+aug_performance = aug_performance.sort_values("accuracy", ascending=False).reset_index(drop=True)
+aug_performance
+# Visualize performance: sort by accuracy, color by augmentation type (blur, rotate, shift, none)
+
+fig = px.bar(
+    aug_performance,
+    x="augmentation",
+    y="accuracy",
+    color="type",
+    title="Classifier Accuracy on Augmented Data"
+)
+fig.update_layout(xaxis_title="Augmentation", yaxis_title="Accuracy")
+fig.show()
+<img src="/images/189_hw1/189_hw1_20.png" alt="label_plot" />
+```
