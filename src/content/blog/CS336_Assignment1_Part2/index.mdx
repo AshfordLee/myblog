@@ -75,7 +75,7 @@ ids = [1,2,3,4,5,6,7]
 
 在经过若干个Transformer块之后, 还要进行归一化, 再送入一个线性层做处理, 最后通过Softmax来输出概率logits来决定下一个词输出什么
 
-## Einstein算子标注
+### Einstein算子标注
 显然在做矩阵乘法/张量乘法的时候, 我们是在某一个维度进行求和, 而那个维度在计算完成之后会消失, Einstein算子标注就是让我们显性的写出那个被求和/将消失的维度, 其他的维度就不管了
 
 我觉得这种张亮乘法其实类似于高维定积分, 当通过累次积分来计算重积分的时候, 显然要写好这一次是对什么变量进行积分, 这次积分完毕之后, 这个变量就不再存在
@@ -122,3 +122,253 @@ images, dim_by,
 注意一下广播的时候首先维度的数量要匹配, 其次每个维度的大小要么相等要么有一个是1, 而在Einstein标注下, 不足的维度会被自动填充并广播
 
 高维张量的乘法是不便想象的, 我觉得首先要明白需要的输出尺寸是多少, 然后再用Einstein标注去写好输入的尺寸, 不变的用`...`替代
+
+
+### 线性变换标注
+
+本项目中统一使用列向量做线性变换的notation, 即若对向量`x`进行线性变换`W`则:
+
+$$
+Y = Wx
+$$
+`x`默认为列向量
+
+
+## 线性层和嵌入模块
+
+### 参数初始化
+对于每一个权重矩阵, 需要把它声明为`nn.Parameter`参数并且传入`shape`, 然后对这个参数做初始化, 比如在线性层当中想构造一个`out_features * in_features`的权重矩阵并且正态初始化
+
+```python
+weight = nn.Parameter(torch.empty(out_features, in_features))
+nn.init.trunc_normal_(weight,mean = mean, std = std, a = -3*std, b = 3*std)
+```
+
+对于不同的层, 文档给了我们不同的初始化要求
+
+$$
+Linear \,\, Layer: N(\mu = 0, \sigma^2 = \frac{2}{d_{in} + d_{out}}), \, \, clip \,\, to \,\, [-3\sigma,3\sigma]
+$$
+
+
+
+$$
+Embedding \,\, Layer: N(\mu = 0, \sigma^2 = 1), \, \, clip \,\, to \,\, [-3,3]
+$$
+
+$$
+RMSNorm \,\, Layer: \mathbb{E}_{n*n}
+$$
+
+所有的参数初始化都用`torch.nn.init.trunc_normal_`来实现
+
+
+### 线性层
+
+很容易实现, 就是声明并初始化一个权重矩阵并且作用在输入上面就可以了
+
+```python
+class Linear(nn.Module):
+
+    def __init__(self,in_features,out_features,device=None,dtype=None):
+
+        super().__init__()
+
+        self.in_features = in_features
+        self.out_features = out_features
+        self.device = device
+        self.dtype = dtype
+
+        std = 2/(self.in_features+self.out_features)
+
+        self.weight = nn.Parameter(torch.empty(self.out_features, self.in_features))
+        nn.init.trunc_normal_(self.weight, mean=0, std=std, a=-3*std, b=3*std)
+
+    def forward(self,x:torch.Tensor) -> torch.Tensor:
+        
+        return torch.einsum("ji,...i->...j",self.weight,x)
+```
+
+很常规, 解释一下最后这个`einsum`的notation, 先忽略这个`...`, 就看`"ji,i->j"` 
+
+
+$$
+\begin{pmatrix}
+w_{11} ..... w_{1in} \\
+\\
+\\
+\\
+w_{out1} ...... w_{out in}
+\end{pmatrix}
+\begin{pmatrix}
+x_1 \\
+\\
+\\
+\\
+x_{in}
+\end{pmatrix}
+$$
+
+从逐行求和的角度看, 结果的第`j`行满足
+
+$$
+y_j = \sum_{i} W[j,i] * x[i]
+$$
+
+所以是对`i`这个维度求和, 求和的维度会消失, 所以得到输出维度是`j`
+
+另一种角度看, 消失的总是内在匹配的维度, 所以是这里的`i`, 即第一个输入的列, 第二个输入的行
+
+运行测试`uv run pytest -k test_linear`, 结果如下:
+```
+(base) zyli@lab:~/Stanford_CS336/assignment1-basics$ uv run pytest -k test_linear
+==================================================================================================== test session starts =====================================================================================================
+platform linux -- Python 3.13.5, pytest-8.4.1, pluggy-1.6.0
+rootdir: /home/zyli/Stanford_CS336/assignment1-basics
+configfile: pyproject.toml
+plugins: jaxtyping-0.3.2
+collected 48 items / 47 deselected / 1 selected                                                                                                                                                                              
+
+tests/test_model.py::test_linear PASSED
+
+============================================================================================== 1 passed, 47 deselected in 0.19s ==============================================================================================
+```
+
+### 嵌入模块
+
+和我们之前讲的一样, 这里就是把输入的`token_id`在`Embedding`矩阵当中去寻找相应的`d_model`维度的向量, 也就是一个升维的过程, 比如说输入为5, 那就去找`Embedding`矩阵的第五行的行向量就好了
+
+```python
+class Embedding(nn.Module):
+    def __init__(self,num_embeddings,embedding_dim,device=None,dtype=None):
+
+
+        super().__init__()
+        
+        self.num_embeddings = num_embeddings
+        self.embedding_dim = embedding_dim
+        self.device = device
+        self.dtype = dtype
+
+        self.weight = nn.Parameter(torch.empty(self.num_embeddings, self.embedding_dim))
+        nn.init.trunc_normal_(self.weight, mean=0, std=1, a=-3, b=3)
+
+
+    def forward(self,token_ids:torch.Tensor) -> torch.Tensor:
+        return self.weight[token_ids]
+```
+
+注意`self.weight[token_ids]`这种写法, 实际上`nn.Parameter`是`tensor`的子类, 是可以通过索引访问的, 举个例子
+```python
+# weight: (num_embeddings=5, embedding_dim=3)
+weight = nn.Parameter(torch.tensor([
+    [0.1, 0.2, 0.3],  # id 0
+    [0.4, 0.5, 0.6],  # id 1
+    [0.7, 0.8, 0.9],  # id 2
+    [1.0, 1.1, 1.2],  # id 3
+    [1.3, 1.4, 1.5],  # id 4
+], dtype=torch.float32))
+
+
+token_ids = torch.tensor([[2,0],
+                          [1,2]], dtype=torch.long)  # shape (2,2)
+
+# 索引取 embedding：结果形状 (2, 2, 3)
+embs = weight[token_ids]
+```
+
+输出类似于
+```python
+tensor([
+  [[0.7, 0.8, 0.9],  # weight[2]
+   [0.1, 0.2, 0.3]], # weight[0]
+  [[0.4, 0.5, 0.6],  # weight[1]
+   [0.7, 0.8, 0.9]]  # weight[2]
+])
+```
+
+不过也不需要了解, 反正知道支持下标访问就行了, 而且这个下标还可以是一个`tensor`
+
+运行测试`uv run pytest -k test_embedding`, 结果如下：
+
+```
+(base) zyli@lab:~/Stanford_CS336/assignment1-basics$ uv run pytest -k test_embedding
+==================================================================================================== test session starts =====================================================================================================
+platform linux -- Python 3.13.5, pytest-8.4.1, pluggy-1.6.0
+rootdir: /home/zyli/Stanford_CS336/assignment1-basics
+configfile: pyproject.toml
+plugins: jaxtyping-0.3.2
+collected 48 items / 47 deselected / 1 selected                                                                                                                                                                              
+
+tests/test_model.py::test_embedding PASSED
+
+============================================================================================== 1 passed, 47 deselected in 0.21s ==============================================================================================
+```
+
+## Pre-Norm Transformer块
+
+这里主要需要实现三个模块, `RMSNorm`归一化, `RoPE`旋转编码, `Feed-Forward`前馈神经网络
+
+### RMSNorm---Root Mean Square Layer Normalization 均方根归一化
+
+对于向量$$a \in \mathbb{R}^{d_{model}}$$, `RMSNorm`会对每个分量`a_i`进行如下变化:
+
+$$
+RMSNorm(a_i) = \frac{a_i}{RMS(a)} g_i
+$$
+
+其中$$RMS(a)$$是一个平方根式求和
+
+$$
+RMS(a) =\sqrt{\frac{1}{d_{model}} \sum_{i=1}^{d_{model}} a_i^2 + \epsilon}
+$$
+
+很好理解, 这个分母真的就是均值->平方求和->开根号(忽略那个$$\epsilon$$)
+
+$$g_i$$是一个可学习的向量, 注意每个$$a_i$$有一个$$g_i$$, 总共有$$d_{model}$$个$$a_i$$, 所以有$$d_{model}$$个$$g_i$$
+
+
+```python
+class rmsnorm(nn.Module):
+
+    def __init__(self,d_model:int,eps:float=1e-5,device=None,dtype=None):
+
+        super().__init__()
+
+        self.d_model = d_model
+        self.eps = eps
+        self.device = device
+        self.dtype = dtype
+
+        self.weights = nn.Parameter(torch.ones(self.d_model))
+        nn.init.trunc_normal_(self.weights, mean=0, std=1, a=-3, b=3)
+
+    def forward(self,x:torch.Tensor) -> torch.Tensor:
+
+        in_dtype = x.dtype
+        x = x.to(torch.float32)
+
+        RMS_a = torch.sqrt(torch.einsum("...d,...d->...",x,x)/self.d_model + self.eps)
+
+        return ((x/RMS_a.unsqueeze(-1))*self.weights).to(in_dtype)
+```
+
+解释一下这个`RMS_a`的算法当中的`einsum`部分, 实际上这里是要算内积分, 所以对于两个一模一样的东西, 直接按照最后一个维度求和就好了
+
+注意这里这个RMS_a.unsqueeze(-1)是不可以省略的, 因为`RMS_a`的尺寸是`...`, 而x的尺寸是`...d`, 所以必须给`RMS_a`的尺寸做成`...1`才能进行除法的广播, 实际上这个`RMS_a`是个标量, 广播的意思就是每个$$a_i$$都要去除以这个标量, 这就必须要求最后一个维度是对齐的, 不然广播会出错
+
+运行测试`uv run pytest -k test_rmsnorm`, 结果如下：
+
+```python
+(base) zyli@lab:~/Stanford_CS336/assignment1-basics$ uv run pytest -k test_rmsnorm
+==================================================================================================== test session starts =====================================================================================================
+platform linux -- Python 3.13.5, pytest-8.4.1, pluggy-1.6.0
+rootdir: /home/zyli/Stanford_CS336/assignment1-basics
+configfile: pyproject.toml
+plugins: jaxtyping-0.3.2
+collected 48 items / 47 deselected / 1 selected                                                                                                                                                                              
+
+tests/test_model.py::test_rmsnorm PASSED
+
+============================================================================================== 1 passed, 47 deselected in 0.18s ==============================================================================================
+```
