@@ -220,8 +220,39 @@ $$
 
 另一种角度看, 消失的总是内在匹配的维度, 所以是这里的`i`, 即第一个输入的列, 第二个输入的行
 
-运行测试`uv run pytest -k test_linear`, 结果如下:
+完善一下`adapters.py`里面的测试, 直接调用自己实现的这个`Linear`类就好了, 注意对于那些权重矩阵, 记得更新他们的内容, 后面所有的测试都是这个格式, 依葫芦画瓢就好了
+
+```python
+# adapters.py
+from cs336_basics import transformer
+
+
+def run_linear(
+    d_in: int,
+    d_out: int,
+    weights: Float[Tensor, " d_out d_in"],
+    in_features: Float[Tensor, " ... d_in"],
+) -> Float[Tensor, " ... d_out"]:
+    """
+    Given the weights of a Linear layer, compute the transformation of a batched input.
+
+    Args:
+        in_dim (int): The size of the input dimension
+        out_dim (int): The size of the output dimension
+        weights (Float[Tensor, "d_out d_in"]): The linear weights to use
+        in_features (Float[Tensor, "... d_in"]): The output tensor to apply the function to
+
+    Returns:
+        Float[Tensor, "... d_out"]: The transformed output of your linear module.
+    """
+
+    # raise NotImplementedError
+    linear_module = transformer.Linear(in_features=d_in,out_features=d_out)
+    linear_module.weight.data = weights
+    return linear_module(in_features)
 ```
+运行测试`uv run pytest -k test_linear`, 结果如下:
+```bash
 (base) zyli@lab:~/Stanford_CS336/assignment1-basics$ uv run pytest -k test_linear
 ==================================================================================================== test session starts =====================================================================================================
 platform linux -- Python 3.13.5, pytest-8.4.1, pluggy-1.6.0
@@ -290,10 +321,36 @@ tensor([
 ```
 
 不过也不需要了解, 反正知道支持下标访问就行了, 而且这个下标还可以是一个`tensor`
+```python
+# adapters.py
+def run_embedding(
+    vocab_size: int,
+    d_model: int,
+    weights: Float[Tensor, " vocab_size d_model"],
+    token_ids: Int[Tensor, " ..."],
+) -> Float[Tensor, " ... d_model"]:
+    """
+    Given the weights of an Embedding layer, get the embeddings for a batch of token ids.
+
+    Args:
+        vocab_size (int): The number of embeddings in the vocabulary
+        d_model (int): The size of the embedding dimension
+        weights (Float[Tensor, "vocab_size d_model"]): The embedding vectors to fetch from
+        token_ids (Int[Tensor, "..."]): The set of token ids to fetch from the Embedding layer
+
+    Returns:
+        Float[Tensor, "... d_model"]: Batch of embeddings returned by your Embedding layer.
+    """
+
+    # raise NotImplementedError
+    embedding_module = transformer.Embedding(num_embeddings=vocab_size,embedding_dim=d_model)
+    embedding_module.weight.data = weights
+    return embedding_module(token_ids)
+```
 
 运行测试`uv run pytest -k test_embedding`, 结果如下：
 
-```
+```bash
 (base) zyli@lab:~/Stanford_CS336/assignment1-basics$ uv run pytest -k test_embedding
 ==================================================================================================== test session starts =====================================================================================================
 platform linux -- Python 3.13.5, pytest-8.4.1, pluggy-1.6.0
@@ -360,9 +417,36 @@ class rmsnorm(nn.Module):
 
 注意这里这个RMS_a.unsqueeze(-1)是不可以省略的, 因为`RMS_a`的尺寸是`...`, 而x的尺寸是`...d`, 所以必须给`RMS_a`的尺寸做成`...1`才能进行除法的广播, 实际上这个`RMS_a`是个标量, 广播的意思就是每个$$a_i$$都要去除以这个标量, 这就必须要求最后一个维度是对齐的, 不然广播会出错
 
+```python
+# adapters.py
+def run_rmsnorm(
+    d_model: int,
+    eps: float,
+    weights: Float[Tensor, " d_model"],
+    in_features: Float[Tensor, " ... d_model"],
+) -> Float[Tensor, " ... d_model"]:
+    """Given the weights of a RMSNorm affine transform,
+    return the output of running RMSNorm on the input features.
+
+    Args:
+        d_model (int): The dimensionality of the RMSNorm input.
+        eps: (float): A value added to the denominator for numerical stability.
+        weights (Float[Tensor, "d_model"]): RMSNorm weights.
+        in_features (Float[Tensor, "... d_model"]): Input features to run RMSNorm on. Can have arbitrary leading
+            dimensions.
+
+    Returns:
+        Float[Tensor,"... d_model"]: Tensor of with the same shape as `in_features` with the output of running
+        RMSNorm of the `in_features`.
+    """
+    # raise NotImplementedError
+    rmsnorm_module = transformer.rmsnorm(d_model=d_model,eps=eps)
+    rmsnorm_module.weights.data = weights
+    return rmsnorm_module(in_features)
+```
 运行测试`uv run pytest -k test_rmsnorm`, 结果如下：
 
-```python
+```bash
 (base) zyli@lab:~/Stanford_CS336/assignment1-basics$ uv run pytest -k test_rmsnorm
 ==================================================================================================== test session starts =====================================================================================================
 platform linux -- Python 3.13.5, pytest-8.4.1, pluggy-1.6.0
@@ -446,3 +530,117 @@ class positionwise_feedforward(nn.Module):
 对于`W_3x`而言, 这里写的看起来像是`xW_3`, 不过关键还是要对齐那个可以匹配的维度, 由于`x`是`(...,d_model)`, `W_3`是`(d_ff, d_model)`, 显然写的时候要确保最后一维的尺寸一致(即d), 然后对这个维度求和(即不出现在结果里面就好了)
 
 在工程上或许这么写不会有什么问题, 毕竟这块以后都会封装, 也没有谁真的会去看, 不过如果是数学作业/paper上还是保持notation的顺序比较好, 不然读者的脸色可能不会太好看
+
+```python
+# adapters.py
+def run_swiglu(
+    d_model: int,
+    d_ff: int,
+    w1_weight: Float[Tensor, " d_ff d_model"],
+    w2_weight: Float[Tensor, " d_model d_ff"],
+    w3_weight: Float[Tensor, " d_ff d_model"],
+    in_features: Float[Tensor, " ... d_model"],
+) -> Float[Tensor, " ... d_model"]:
+    """Given the weights of a SwiGLU network, return
+    the output of your implementation with these weights.
+
+    Args:
+        d_model (int): Dimensionality of the feedforward input and output.
+        d_ff (int): Dimensionality of the up-project happening internally to your swiglu.
+        w1_weight (Float[Tensor, "d_ff d_model"]): Stored weights for W1
+        w2_weight (Float[Tensor, "d_model d_ff"]): Stored weights for W2
+        w3_weight (Float[Tensor, "d_ff d_model"]): Stored weights for W3
+        in_features (Float[Tensor, "... d_model"]): Input embeddings to the feed-forward layer.
+
+    Returns:
+        Float[Tensor, "... d_model"]: Output embeddings of the same shape as the input embeddings.
+    """
+
+    # raise NotImplementedError
+    swiglu_module = transformer.positionwise_feedforward(d_ff=d_ff,d_model=d_model)
+    swiglu_module.w1_weight.data = w1_weight
+    swiglu_module.w2_weight.data = w2_weight
+    swiglu_module.w3_weight.data = w3_weight
+
+    return swiglu_module(in_features)
+```
+运行测试`uv run pytest -k test_swiglu`, 结果如下：
+```bash
+(base) zyli@lab:~/Stanford_CS336/assignment1-basics$ uv run pytest -k test_swiglu
+Uninstalled 1 package in 0.92ms
+Installed 1 package in 16ms
+================================================================================================= test session starts ==================================================================================================
+platform linux -- Python 3.13.5, pytest-8.4.1, pluggy-1.6.0
+rootdir: /home/zyli/Stanford_CS336/assignment1-basics
+configfile: pyproject.toml
+plugins: jaxtyping-0.3.2
+collected 48 items / 47 deselected / 1 selected                                                                                                                                                                        
+
+tests/test_model.py::test_swiglu PASSED
+
+=========================================================================================== 1 passed, 47 deselected in 0.18s ===========================================================================================
+```
+
+
+### 相对位置编码
+
+相对位置编码和多头注意力机制应该是最难的, 先不考虑代码的问题, 我们先来理解一下这玩意到底是在干什么
+
+首先RoPE接受一个参数$$\theta$$, 这会决定我们每次旋转的角度
+
+两个`index`:`i`和`k`, `i`代表的是输入$$x^i$$的索引, 也就是这是输入的第几条输出, `k`代表的是现在是在对这个输出的第几组维度进行变换, 对于每一组`(i, k)`, 变换的角度$$\theta_{i,k} = \frac{i}{\theta^{\frac{2k-2}{d}}}$$, 其中`d`指的是`d_model`, 为固定的模型参数
+
+维度是被两两分组的, 比如说`d_model`是8, 那就被切分成4组, $$k \in (1,2,3,4)$$
+
+每一组的旋转矩阵为:
+
+$$
+R_{k}^{i} = \begin{pmatrix}
+\cos{\theta_{i,k}},  -\sin{\theta_{i,k}} \\
+\sin{\theta_{i,k}},  \cos{\theta_{i,k}}
+
+\end{pmatrix}
+$$
+
+现在对$$q^{1} = W_{q}x^{1} = [1,0,1,0]$$来做变换, $$q^1$$的i=1, k被分为两组, 1和2, 那么可以计算出以下两个$$\theta$$
+
+$$
+\theta_{1,1} = \frac{1}{\theta^{0}} = 1 \\
+\theta_{1,2} = \frac{1}{\theta^{0.5}}
+$$
+
+进而得到两个旋转矩阵$$R_{1}^{1}, R_{2}^{1}$$, 那么组一是[1,0], 组二是[0,1], 分别对其左乘$$R_{1}^{1}, R_{2}^{1}$$即可
+
+写成比较大的矩阵形式就是:
+
+$$
+R^{(i)}=\mathrm{diag}\big(R^{(i)}_1,\;R^{(i)}_2,\;\dots,\;R^{(i)}_{d/2}\big)
+=
+\begin{bmatrix}
+R^{(i)}_1 &  &  & 0\\[2pt]
+ & R^{(i)}_2 &  & \\[2pt]
+ &  & \ddots & \\[2pt]
+0 &  &  & R^{(i)}_{d/2}
+\end{bmatrix},
+$$
+
+$$
+q^{(i)}=
+\begin{bmatrix}
+q^{(i)}_1\\[4pt]
+q^{(i)}_2\\[4pt]
+\vdots\\[4pt]
+q^{(i)}_{d/2}
+\end{bmatrix},
+\qquad
+q^{(i)}_k \in \mathbb{R}^2,\quad
+q^{(i)}_k=
+\begin{bmatrix}
+q^{(i)}_{2k-1}\\[4pt]
+q^{(i)}_{2k}
+\end{bmatrix}
+\quad (k=1,\dots,d/2).
+$$
+
+那么整个的RoPE就是$$R^{i} q^{i}$$, 一句话总结就是先把$$q^{i}/k^{i}$$分组, 然后每组构造一个2*2的旋转矩阵, 对每个组左乘这个旋转矩阵之后凑起来就得到了RoPE的结果
+
