@@ -168,6 +168,7 @@ $$
 很容易实现, 就是声明并初始化一个权重矩阵并且作用在输入上面就可以了
 
 ```python
+# transformer.py
 class Linear(nn.Module):
 
     def __init__(self,in_features,out_features,device=None,dtype=None):
@@ -239,6 +240,7 @@ tests/test_model.py::test_linear PASSED
 和我们之前讲的一样, 这里就是把输入的`token_id`在`Embedding`矩阵当中去寻找相应的`d_model`维度的向量, 也就是一个升维的过程, 比如说输入为5, 那就去找`Embedding`矩阵的第五行的行向量就好了
 
 ```python
+# transformer.py
 class Embedding(nn.Module):
     def __init__(self,num_embeddings,embedding_dim,device=None,dtype=None):
 
@@ -329,6 +331,7 @@ $$g_i$$是一个可学习的向量, 注意每个$$a_i$$有一个$$g_i$$, 总共�
 
 
 ```python
+# transformer.py
 class rmsnorm(nn.Module):
 
     def __init__(self,d_model:int,eps:float=1e-5,device=None,dtype=None):
@@ -372,3 +375,74 @@ tests/test_model.py::test_rmsnorm PASSED
 
 ============================================================================================== 1 passed, 47 deselected in 0.18s ==============================================================================================
 ```
+
+### 前馈神经网络
+
+虽然说是神经网络, 但是其实就是设计一个激活函数, 大概用的有以下几种:
+
+`SiLU/Swish`
+
+$$
+SiLU(x) = x*\sigma(x) = \frac{x}{1+e^{-x}}
+$$
+
+`Gated Linear Units/GLU`
+
+$$
+GLU(x,W_1,W_2) = \sigma(W_1x) \odot W_2x
+$$
+
+该算子为Hadamard积, 即逐元素相乘
+
+`SwiGLU`
+
+$$
+SwiGLU(x,W_1,W_2,W_3) = W_2(SiLU(W_1x) \odot W_3x)
+$$
+
+考虑一下`SwiGLU`的尺寸问题, 输入的`x`是`(...,d_model)`, 经过`SwiGLU`的变换之后仍然应该是这个尺寸, 所以`W_1`和`W_3`的尺寸应当是`(d_ff, d_model)`, `W_2`应该是`(d_model, d_ff)`
+
+借用`torch.sigmoid`实现这个`SwiGLU`的代码:
+
+```python
+# transformer.py
+class positionwise_feedforward(nn.Module):
+
+    def __init__(self,d_model,d_ff):
+        super().__init__()
+
+        self.d_model = d_model
+        self.d_ff = d_ff
+
+        self.w1_weight = nn.Parameter(torch.empty(self.d_ff, self.d_model))
+        self.w2_weight = nn.Parameter(torch.empty(self.d_model, self.d_ff))
+        self.w3_weight = nn.Parameter(torch.empty(self.d_ff, self.d_model))
+
+        nn.init.trunc_normal_(self.w1_weight, mean=0, std=1, a=-3, b=3)
+        nn.init.trunc_normal_(self.w2_weight, mean=0, std=1, a=-3, b=3)
+        nn.init.trunc_normal_(self.w3_weight, mean=0, std=1, a=-3, b=3)
+
+    def silu(self,x):
+        return torch.sigmoid(x) * x
+
+    def element_wise(self,x,y):
+        return torch.einsum("...,...->...",x,y)
+
+    def forward(self,x):
+        w3x = torch.einsum("...d,fd->...f",x ,self.w3_weight)
+        w1x = torch.einsum("...d,fd->...f",x ,self.w1_weight)
+
+        silu_w1x = self.silu(w1x)
+
+        swiglu_ouptut = self.element_wise(silu_w1x,w3x)
+
+        output = torch.einsum("...f,df->...d", swiglu_ouptut, self.w2_weight)
+
+        return output
+```
+
+还是讲一下这里的维度notation, 首先对于`Hadamard`算子应该是比较好理解的, 前后尺寸都是`...`,意味着不对任何维度求和, 那当然就是逐元素相乘
+
+对于`W_3x`而言, 这里写的看起来像是`xW_3`, 不过关键还是要对齐那个可以匹配的维度, 由于`x`是`(...,d_model)`, `W_3`是`(d_ff, d_model)`, 显然写的时候要确保最后一维的尺寸一致(即d), 然后对这个维度求和(即不出现在结果里面就好了)
+
+在工程上或许这么写不会有什么问题, 毕竟这块以后都会封装, 也没有谁真的会去看, 不过如果是数学作业/paper上还是保持notation的顺序比较好, 不然读者的脸色可能不会太好看
