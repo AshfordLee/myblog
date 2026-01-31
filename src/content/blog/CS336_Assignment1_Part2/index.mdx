@@ -6,7 +6,7 @@ tags: ['CS336']
 # heroImage: { src: './thumbnail.jpg', alt: '作业封面图片' }
 # heroImage: {}
 language: '中文'
-draft: true
+draft: false
 ---
 
 import { Card, Button } from 'astro-pure/user'
@@ -609,7 +609,7 @@ $$
 \theta_{1,2} = \frac{1}{\theta^{0.5}}
 $$
 
-进而得到两个旋转矩阵$$R_{1}^{1}, R_{2}^{1}$$, 那么组一是[1,0], 组二是[0,1], 分别对其左乘$$R_{1}^{1}, R_{2}^{1}$$即可
+进而得到两个旋转矩阵$$R_{1}^{1}, R_{2}^{1}$$, 那么组一是$$[1,0]$$, $$组二是[0,1]$$, 分别对其左乘$$R_{1}^{1}, R_{2}^{1}$$即可
 
 写成比较大的矩阵形式就是:
 
@@ -644,3 +644,969 @@ $$
 
 那么整个的RoPE就是$$R^{i} q^{i}$$, 一句话总结就是先把$$q^{i}/k^{i}$$分组, 然后每组构造一个2*2的旋转矩阵, 对每个组左乘这个旋转矩阵之后凑起来就得到了RoPE的结果
 
+
+实验文档中提出了用`self.register_buffer`来注册这些三角函数值, 因为他们只依赖于输入角度`theta`, 输入的"编号"`i`以及离散取值于$$[0,\frac{d}{2}]$$的`k`, 所以可以在初始化的时候就把他们确定下来
+
+注意$$\theta_{i,k}$$, 他的指标应该是`i`和`k`的笛卡尔积, 这样才能保证每个`i`和`k`都能被遍历到, 所以应当通过以下代码来建立这个$$\theta_{i,k}$$
+
+```python
+positions = torch.arange(sequence_length).float() # i的向量
+
+freqs = theta ** (torch.arange(0, self.d_k , 2).float() / self.d_k) # theta^{2k-2/d}的向量
+
+angles = torch.outer(positions, freqs) # i和K的笛卡尔积
+```
+
+然后注册成为类buffer
+```python
+self.register_buffer("cos_cached", torch.cos(angles), persistent = False)
+self.register_buffer("sin_cached", torch.sin(angles), persistent = False)
+```
+
+如此一来的话就可以通过`token_positions`来访问得到$$\cos(\theta_{i,k})$$和$$\sin(\theta_{i,k})$$了, 例如:
+
+```python
+cos_pos = self.cos_cached[token_positions] # 直接拿到这个x所需的所有cos值, 注意token_positions是个tensor
+sin_pos = self.sin_cached[token_positions]
+```
+
+回想一下在之前的变换矩阵示意图里面, 这个变换最后并不改变输入`x`的shape, 但是要能把这个分块`d/2 * d/2`的变换矩阵作用上去, 是需要对`x`进行一些`reshape`的
+
+```python
+x_reshaped = x.view(batch_size,seq_len,d_k//2,2) # 分成d_k//2个组, 每组两个元素
+x1,x2 = x_reshaped[...,0],x_reshaped[...,1] # 对于每个组, 把第一个元素和第二个元素分开
+```
+
+然后进行变换并且`stack`回去即可
+
+```python
+x1_rotated = x1 * cos_pos - x2 * sin_pos # 注意这里的x_1是: "一个输入token(一个i)"的所有的d_k//2个组的x_1, 不只是一个组的x_1
+x2_rotated = x2 * cos_pos + x1 * sin_pos
+
+# 如果说输入的x = [1,2,3,4,5,6], 那么这里的x_1是形如[1,3,5]的tensor, 所以这个变换是向量化的
+x_rotated = torch.stack([x1_rotated, x2_rotated], dim=-1)
+x_rotated = x_rotated.view(batch_size, seq_len, d_k)
+```
+
+整体代码如下:
+```python
+# transformer.py
+class RoPE(nn.Module):
+
+    def __init__(self,theta,d_k,max_seq_len,device=None):
+        super().__init__()
+
+        self.theta = theta
+        self.d_k = d_k
+        self.max_seq_len = max_seq_len
+        self.device = device
+
+        freqs = self.theta ** (torch.arange(0,self.d_k,2).float()/d_k)
+
+        positions = torch.arange(max_seq_len).float()
+
+        angles = torch.outer(positions,1.0/freqs)
+
+        self.register_buffer("cos_cached", torch.cos(angles),persistent=False)
+        self.register_buffer("sin_cached", torch.sin(angles),persistent=False)
+
+    def forward(self,x:torch.Tensor,token_positions:torch.Tensor) -> torch.Tensor:
+
+        batch_size,seq_len,d_k = x.shape
+
+        cos_pos = self.cos_cached[token_positions]
+        sin_pos = self.sin_cached[token_positions]
+
+        x_reshaped = x.view(batch_size,seq_len,d_k//2,2)
+
+        x1,x2 = x_reshaped[...,0],x_reshaped[...,1]
+
+        x1_rotated = x1 * cos_pos - x2 * sin_pos
+        x2_rotated = x2 * cos_pos + x1 * sin_pos
+
+        x_rotated = torch.stack([x1_rotated, x2_rotated], dim=-1)
+        x_rotated = x_rotated.view(batch_size, seq_len, d_k)
+        
+        return x_rotated
+```
+
+完善测试:
+```python
+# adapters.py
+def run_rope(
+    d_k: int,
+    theta: float,
+    max_seq_len: int,
+    in_query_or_key: Float[Tensor, " ... sequence_length d_k"],
+    token_positions: Int[Tensor, " ... sequence_length"],
+) -> Float[Tensor, " ... sequence_length d_k"]:
+    """
+    Run RoPE for a given input tensor.
+
+    Args:
+        d_k (int): Embedding dimension size for the query or key tensor.
+        theta (float): RoPE parameter.
+        max_seq_len (int): Maximum sequence length to pre-cache if your implementation does that.
+        in_query_or_key (Float[Tensor, "... sequence_length d_k"]): Input tensor to run RoPE on.
+        token_positions (Int[Tensor, "... sequence_length"]): Tensor of shape (batch_size, sequence_length) with the token positions
+    Returns:
+        Float[Tensor, " ... sequence_length d_k"]: Tensor with RoPEd input.
+    """
+    # raise NotImplementedError
+    RoPE = transformer.RoPE(theta=theta,d_k=d_k,max_seq_len=max_seq_len)
+    return RoPE(in_query_or_key,token_positions)
+```
+
+运行测试`uv run pytest -k test_rope`, 结果如下：
+
+```bash
+(base) zyli@lab:~/Stanford_CS336/assignment1-basics$ uv run pytest -k test_rope
+========================================================================================== test session starts ==========================================================================================
+platform linux -- Python 3.13.5, pytest-8.4.1, pluggy-1.6.0
+rootdir: /home/zyli/Stanford_CS336/assignment1-basics
+configfile: pyproject.toml
+plugins: jaxtyping-0.3.2
+collected 48 items / 47 deselected / 1 selected                                                                                                                                                         
+
+tests/test_model.py::test_rope PASSED
+
+=================================================================================== 1 passed, 47 deselected in 0.17s ====================================================================================
+```
+
+
+### Softmax和点积注意力机制
+
+首先实现`Softmax`函数, 对向量$$v$$做归一化
+
+$$
+Softmax(v)_i = \frac{exp(v_i)}{\sum_{j=1}^{n} exp(v_j)}
+$$
+
+注意求指数有可能会让数据变得很大从而上溢出, 所以一个比较好的办法是让这个向量的每个分量减去这个向量的最大分量, 因为对一个很小的数求指数是不会溢出的
+
+```python
+# transformer.py
+class Softmax(nn.Module):
+    
+    def __init__(self, x:torch.Tensor, dimension:int):
+        super().__init__()
+
+        self.x = x
+        self.dimension = dimension
+
+
+    def forward(self):
+        x_shifted = self.x - torch.max(self.x,dim = self.dimension,keepdim=True)[0]
+
+        exp_x = torch.exp(x_shifted)
+
+        sum_exp_x = torch.sum(exp_x, dim=self.dimension, keepdim=True)
+
+        return exp_x / sum_exp_x
+```
+
+完善测试:
+
+```python
+# adapters.py
+def run_softmax(in_features: Float[Tensor, " ..."], dim: int) -> Float[Tensor, " ..."]:
+    """
+    Given a tensor of inputs, return the output of softmaxing the given `dim`
+    of the input.
+
+    Args:
+        in_features (Float[Tensor, "..."]): Input features to softmax. Shape is arbitrary.
+        dim (int): Dimension of the `in_features` to apply softmax to.
+
+    Returns:
+        Float[Tensor, "..."]: Tensor of with the same shape as `in_features` with the output of
+        softmax normalizing the specified `dim`.
+    """
+    # raise NotImplementedError
+    softmax_module = transformer.Softmax(in_features,dim)
+    return softmax_module()
+```
+
+注意这个`dim`是必须的参数, 因为需要知道对什么维度进行归一化
+
+运行测试`uv run pytest -k test_softmax_matches_pytorch`, 结果如下：
+
+```bash
+(base) zyli@lab:~/Stanford_CS336/assignment1-basics$ uv run pytest -k test_softmax_matches_pytorch
+========================================================================================== test session starts ==========================================================================================
+platform linux -- Python 3.13.5, pytest-8.4.1, pluggy-1.6.0
+rootdir: /home/zyli/Stanford_CS336/assignment1-basics
+configfile: pyproject.toml
+plugins: jaxtyping-0.3.2
+collected 48 items / 47 deselected / 1 selected                                                                                                                                                         
+
+tests/test_nn_utils.py::test_softmax_matches_pytorch PASSED
+
+=================================================================================== 1 passed, 47 deselected in 0.17s ====================================================================================
+```
+
+接下来计算点积注意力
+
+$$
+Attention(Q,K,V) = Softmax(\frac{Q^TK}{\sqrt{d_k}})V
+$$
+
+先考虑一下尺寸问题, 简单来说, 假设$$Q \in \mathbb{R}^{n \times d_k}$$, $$K \in \mathbb{R}^{m \times d_k}$$, $$V \in \mathbb{R}^{m \times d_v}$$, 那么输出尺寸应该是$$ \mathbb{R}^{n \times d_v}$$, 但是$$Q^TK$$如果按照一般的矩阵乘法是不能相乘的, 这里其实对这两个矩阵的每个行向量做内积
+
+$$
+Q^TK_{ij} = \sum_{k=1}^{d_k} Q_{ik} K_{kj}
+$$
+
+注意求和, 每行有$$d_k$$个元素, 实验文档要求我们用`einsum`来实现这个求和, 如果是用`pytorch`的话, 这里要手动修改成$$QK^T$$的乘积形式
+
+但我觉得这种记号并不好, 既然用了矩阵乘法的记号, 那应该要确保按照记号是可相乘的, 不然当发现维度不匹配的时候会很confused
+
+```python
+scores = torch.einsum("b...qd,b...kd->b...qk",self.Q,self.K)/torch.sqrt(torch.tensor(self.d_k,dtype=torch.float32))
+# kd 指的是Q当中的n * d_k
+# qd 指的是K当中的m * d_k
+# 匹配的是最后一维, einsum会自动把他们转置成可以相乘的形式
+```
+然后用`mask`做掩码变换, 这里`mask`的维度是$$n \times m$$, 暂时不需要管他怎么实现的, 当作类里有的成员变量就好, 既然他是个布尔矩阵, 那只要用`torch.where`去把`mask`和计算出的分数做一个类似与运算就好了
+
+```python
+if self.mask is not None:
+    scores = torch.where(self.mask,scores,float('-inf'))
+```
+
+接下来做`Softmax`变换, 对最后一维做归一化
+
+```python
+attention_weights = torch.softmax(scores, dim=-1)
+```
+
+最后乘以$$V$$即可, 注意前面的结果是可以"直接"乘以$$V$$的, 因为维度已经匹配了, 而像之前那样维度不匹配的情况, `einsum`会自动把他们转置成可以相乘的形式
+
+
+```python
+output = torch.einsum("b...qk,b...kv->b...qv",attention_weights,self.V)
+
+return output
+```
+
+总体实现如下
+```python
+# transformer.py
+class scaled_dot_product_attention(nn.Module):
+
+    def __init__(self,K,Q,V,mask):
+        super().__init__()
+        self.Q = Q # [batch,...seq_q,d_q]
+        self.K = K # [batch,...,seq_k,d_k]
+        self.V = V # [batch,...,seq_k,d_v]
+        self.mask = mask # [seq_q,seq_k]
+        self.d_k = Q.shape[-1]
+
+    def forward(self):
+        scores = torch.einsum("b...qd,b...kd->b...qk",self.Q,self.K)/torch.sqrt(torch.tensor(self.d_k,dtype=torch.float32))
+        
+        if self.mask is not None:
+            scores = torch.where(self.mask,scores,float('-inf'))
+
+        attention_weights = torch.softmax(scores, dim=-1)
+
+        output = torch.einsum("b...qk,b...kv->b...qv",attention_weights,self.V)
+
+        return output
+```
+
+完善测试:
+
+```python
+# adapters.py
+def run_scaled_dot_product_attention(
+    Q: Float[Tensor, " ... queries d_k"],
+    K: Float[Tensor, " ... keys d_k"],
+    V: Float[Tensor, " ... values d_v"],
+    mask: Bool[Tensor, " ... queries keys"] | None = None,
+) -> Float[Tensor, " ... queries d_v"]:
+    """
+    Given key (K), query (Q), and value (V) tensors, return
+    the output of your scaled dot product attention implementation.
+
+    Args:
+        Q (Float[Tensor, " ... queries d_k"]): Query tensor
+        K (Float[Tensor, " ... keys d_k"]): Key tensor
+        V (Float[Tensor, " ... values d_v"]): Values tensor
+        mask (Bool[Tensor, " ... queries keys"] | None): Mask tensor
+    Returns:
+        Float[Tensor, " ... queries d_v"]: Output of SDPA
+    """
+    # raise NotImplementedError
+    attention = transformer.scaled_dot_product_attention(K,Q,V,mask)
+    return attention()
+```
+
+这里有两个测试, 分别运行`uv run pytest -k test_scaled_dot_product_attention`和`uv run pytest -k test_4d_scaled_dot_product_attention`, 结果如下
+
+
+```bash
+(base) zyli@lab:~/Stanford_CS336/assignment1-basics$ uv run pytest -k test_scaled_dot_product_attention
+========================================================================================== test session starts ==========================================================================================
+platform linux -- Python 3.13.5, pytest-8.4.1, pluggy-1.6.0
+rootdir: /home/zyli/Stanford_CS336/assignment1-basics
+configfile: pyproject.toml
+plugins: jaxtyping-0.3.2
+collected 48 items / 47 deselected / 1 selected                                                                                                                                                         
+
+tests/test_model.py::test_scaled_dot_product_attention PASSED
+
+=================================================================================== 1 passed, 47 deselected in 0.17s ====================================================================================
+
+
+(base) zyli@lab:~/Stanford_CS336/assignment1-basics$ uv run pytest -k test_4d_scaled_dot_product_attention
+========================================================================================== test session starts ==========================================================================================
+platform linux -- Python 3.13.5, pytest-8.4.1, pluggy-1.6.0
+rootdir: /home/zyli/Stanford_CS336/assignment1-basics
+configfile: pyproject.toml
+plugins: jaxtyping-0.3.2
+collected 48 items / 47 deselected / 1 selected                                                                                                                                                         
+
+tests/test_model.py::test_4d_scaled_dot_product_attention PASSED
+
+=================================================================================== 1 passed, 47 deselected in 0.44s ====================================================================================
+```
+
+
+### 多头注意力机制
+
+之前我们只关心怎么通过$$Q,K,V$$来计算出注意力, 但是没有探究这个$$Q,K,V$$是怎么通过输入`x`得到的, 实际上我们有以下的流程图
+
+```
+输入 x:        (batch, seq_len, d_model)
+                    ↓
+              ┌────┴────┐
+              ↓         ↓
+WQ x:    (batch, seq_len, h×d_k)     WK x: (batch, seq_len, h×d_k)
+WV x:    (batch, seq_len, h×d_v)     
+              ↓
+        按头切分 (split) 总共h个头
+              ↓
+Q: (batch, seq_len, h, d_k)  →  view成 (batch×h, seq_len, d_k)
+K: (batch, seq_len, h, d_k)  →  view成 (batch×h, seq_len, d_k)
+V: (batch, seq_len, h, d_v)  →  view成 (batch×h, seq_len, d_v)
+              ↓
+        多头注意力计算
+              ↓
+输出: (batch×h, seq_len, d_v)
+              ↓
+        Concat所有头
+              ↓
+输出: (batch, seq_len, h×d_v)
+              ↓
+              WO
+              ↓
+最终输出: (batch, seq_len, d_model)
+```
+也就是说, 先通过三个不同的线性层把输入`x`变换到$$Q,K,V$$三个矩阵, 然后通过多头注意力机制计算出注意力, 最后通过一个线性层把多个头的结果拼接起来, 再通过一个线性层得到最终的输出
+
+```python
+self.d_model = d_model
+self.num_heads = num_heads
+self.q_proj = Linear(d_model, num_heads * self.d_k)
+self.k_proj = Linear(d_model, num_heads * self.d_k)
+self.v_proj = Linear(d_model, num_heads * self.d_k)
+self.output_proj = Linear(num_heads * self.d_v, d_model)
+
+batch_size, seq_len, d_model = x.shape
+
+Q = self.q_proj(x)  # [batch, seq, num_heads * d_k]
+K = self.k_proj(x)  # [batch, seq, num_heads * d_k]
+V = self.v_proj(x)  # [batch, seq, num_heads * d_k]
+
+# Rearrange to separate heads
+Q = rearrange(Q, "b s (h d) -> b h s d", h=self.num_heads)
+K = rearrange(K, "b s (h d) -> b h s d", h=self.num_heads)
+V = rearrange(V, "b s (h d) -> b h s d", h=self.num_heads)
+```
+
+如果要进行旋转位置编码, 注意每个头上都要应用
+```python
+if self.use_rope:
+    # 创建 token_positions [seq_len]
+    token_positions = torch.arange(seq_len, device=x.device)
+    # token_positions = self.token_positions
+
+    # 为每个头应用 RoPE，形状 [batch, num_heads, seq, d_k]
+    for head in range(self.num_heads):
+        Q[:, head, :, :] = self.rope(Q[:, head, :, :], token_positions.unsqueeze(0))
+        K[:, head, :, :] = self.rope(K[:, head, :, :], token_positions.unsqueeze(0))
+```
+
+还需要计算掩码矩阵, 首先考虑尺寸, 实际上`mask`的尺寸和`QK^T`的尺寸是一样的, 这里有:
+```
+Q: (batch, num_heads, seq_len, d_k)
+K: (batch, num_heads, seq_len, d_k)
+```
+
+所以`mask`的尺寸应该是`(seq_len, seq_len)`
+
+再看`mask`的元素, 行表示`query`, 列表示`key`, 第i个`query`只能看到前i个'key', 所以这是个下三角矩阵
+```
+allow_mask[i][j] = True 表示 query_i 可以 attend to key_j
+
+        key_0  key_1  key_2  key_3
+        ─────  ─────  ─────  ─────
+query_0 │  ✓     ✗     ✗     ✗    ← 只能看自己及之前
+query_1 │  ✓     ✓     ✗     ✗    ← 只能看自己及之前
+query_2 │  ✓     ✓     ✓     ✗    ← 只能看自己及之前
+query_3 │  ✓     ✓     ✓     ✓    ← 只能看自己及之前
+```
+
+```python
+# 添加因果掩码
+causal_mask = torch.triu(torch.ones(seq_len, seq_len, device=x.device), diagonal=1).bool()
+# scaled_dot_product_attention 期望 mask True = 允许，False = 屏蔽
+# 但我们的 causal_mask True = 屏蔽，所以需要取反
+allow_mask = ~causal_mask
+allow_mask = allow_mask.unsqueeze(0).unsqueeze(1).expand(batch_size, self.num_heads, -1, -1)
+```
+
+
+然后把得到的$$K,Q,V$$传入之前实现的点积注意力机制, 注意这里的$$K,Q,V$$都是有`head`这个维度的, 所以返回的结果也是分`head`的, 要再通过`rearrange`把他们拼回去
+
+```python
+# 使用 scaled_dot_product_attention 类进行计算
+# 注意：参考实现使用 (K, Q, V, mask) 的顺序
+attn = scaled_dot_product_attention(K, Q, V, allow_mask)
+attended_values = attn()  # [batch, num_heads, seq, d_k]
+
+# Rearrange back to [batch, seq, num_heads * d_k]
+attended_values = rearrange(attended_values, "b h s d -> b s (h d)", h=self.num_heads)
+
+output = self.output_proj(attended_values)  # [batch, seq, d_model]
+
+return output
+```
+
+整个实现如下:
+```python
+# transformer.py
+class multihead_self_attention(nn.Module):
+
+    def __init__(self, d_model, num_heads, use_rope=True,max_seq_len=1024, theta=10000,token_positions=None):
+        super().__init__()
+
+        self.d_model = d_model
+        self.num_heads = num_heads
+        self.use_rope = use_rope
+        self.token_positions = token_positions
+
+        self.d_k = d_model // num_heads
+        self.d_v = self.d_k
+
+        self.q_proj = Linear(d_model, num_heads * self.d_k)
+        self.k_proj = Linear(d_model, num_heads * self.d_k)
+        self.v_proj = Linear(d_model, num_heads * self.d_k)
+        self.output_proj = Linear(num_heads * self.d_v, d_model)
+
+        if self.use_rope:
+            self.rope = RoPE(theta=theta, d_k=self.d_k, max_seq_len=max_seq_len)
+    
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        batch_size, seq_len, d_model = x.shape
+
+        Q = self.q_proj(x)  # [batch, seq, num_heads * d_k]
+        K = self.k_proj(x)  # [batch, seq, num_heads * d_k]
+        V = self.v_proj(x)  # [batch, seq, num_heads * d_k]
+
+        # Rearrange to separate heads
+        Q = rearrange(Q, "b s (h d) -> b h s d", h=self.num_heads)
+        K = rearrange(K, "b s (h d) -> b h s d", h=self.num_heads)
+        V = rearrange(V, "b s (h d) -> b h s d", h=self.num_heads)
+
+        if self.use_rope:
+            # 创建 token_positions [seq_len]
+            token_positions = torch.arange(seq_len, device=x.device)
+            # token_positions = self.token_positions
+
+            # 为每个头应用 RoPE，形状 [batch, num_heads, seq, d_k]
+            for head in range(self.num_heads):
+                Q[:, head, :, :] = self.rope(Q[:, head, :, :], token_positions.unsqueeze(0))
+                K[:, head, :, :] = self.rope(K[:, head, :, :], token_positions.unsqueeze(0))
+
+        # 添加因果掩码
+        causal_mask = torch.triu(torch.ones(seq_len, seq_len, device=x.device), diagonal=1).bool()
+        # scaled_dot_product_attention 期望 mask True = 允许，False = 屏蔽
+        # 但我们的 causal_mask True = 屏蔽，所以需要取反
+        allow_mask = ~causal_mask
+        allow_mask = allow_mask.unsqueeze(0).unsqueeze(1).expand(batch_size, self.num_heads, -1, -1)
+
+        # 使用 scaled_dot_product_attention 类进行计算
+        # 注意：参考实现使用 (K, Q, V, mask) 的顺序
+        attn = scaled_dot_product_attention(K, Q, V, allow_mask)
+        attended_values = attn()  # [batch, num_heads, seq, d_k]
+
+        # Rearrange back to [batch, seq, num_heads * d_k]
+        attended_values = rearrange(attended_values, "b h s d -> b s (h d)", h=self.num_heads)
+
+        output = self.output_proj(attended_values)  # [batch, seq, d_model]
+
+        return output
+```
+
+完善测试接口:
+```python
+# adapters.py
+
+def run_multihead_self_attention(
+    d_model: int,
+    num_heads: int,
+    q_proj_weight: Float[Tensor, " d_k d_in"],
+    k_proj_weight: Float[Tensor, " d_k d_in"],
+    v_proj_weight: Float[Tensor, " d_v d_in"],
+    o_proj_weight: Float[Tensor, " d_model d_v"],
+    in_features: Float[Tensor, " ... sequence_length d_in"],
+) -> Float[Tensor, " ... sequence_length d_out"]:
+    """
+    Given the key, query, and value projection weights of a naive unbatched
+    implementation of multi-head attention, return the output of an optimized batched
+    implementation. This implementation should handle the key, query, and value projections
+    for all heads in a single matrix multiply.
+    This function should not use RoPE.
+    See section 3.2.2 of Vaswani et al., 2017.
+
+    Args:
+        d_model (int): Dimensionality of the feedforward input and output.
+        num_heads (int): Number of heads to use in multi-headed attention.
+        max_seq_len (int): Maximum sequence length to pre-cache if your implementation does that.
+        q_proj_weight (Float[Tensor, "d_k d_in"]): Weights for the Q projection
+        k_proj_weight (Float[Tensor, "d_k d_in"]): Weights for the K projection
+        v_proj_weight (Float[Tensor, "d_k d_in"]): Weights for the V projection
+        o_proj_weight (Float[Tensor, "d_model d_v"]): Weights for the output projection
+        in_features (Float[Tensor, "... sequence_length d_in"]): Tensor to run your implementation on.
+
+    Returns:
+        Float[Tensor, " ... sequence_length d_out"]: Tensor with the output of running your optimized, batched multi-headed attention
+        implementation with the given QKV projection weights and input features.
+    """
+    # raise NotImplementedError
+    multihead = transformer.multihead_self_attention(d_model=d_model, num_heads=num_heads, use_rope=False)
+    multihead.q_proj.weight.data = q_proj_weight
+    multihead.k_proj.weight.data = k_proj_weight
+    multihead.v_proj.weight.data = v_proj_weight
+    multihead.output_proj.weight.data = o_proj_weight
+
+    return multihead(in_features)
+```
+
+运行测试`uv run pytest -k test_multihead_self_attention`, 结果如下:
+
+```bash
+(base) zyli@lab:~/Stanford_CS336/assignment1-basics$ uv run pytest -k test_multihead_self_attention
+========================================================================================== test session starts ==========================================================================================
+platform linux -- Python 3.13.5, pytest-8.4.1, pluggy-1.6.0
+rootdir: /home/zyli/Stanford_CS336/assignment1-basics
+configfile: pyproject.toml
+plugins: jaxtyping-0.3.2
+collected 48 items / 46 deselected / 2 selected                                                                                                                                                         
+
+tests/test_model.py::test_multihead_self_attention PASSED
+tests/test_model.py::test_multihead_self_attention_with_rope PASSED
+
+=================================================================================== 2 passed, 46 deselected in 0.43s ====================================================================================
+```
+
+
+## 组装Transformer
+
+回忆一下架构图里面, 但我们有了`Transformer Block` `Embedding Layer` `RMSNorm` `Linear` `Softmax`之后, 我们就可以来拼装完整的`Transformer`了
+
+### 单个的Transformer Block
+
+照着图拼就行了, 不过要注意类似`ResNet`的结构
+
+```python
+# transformer.py
+class transformer_block(nn.Module):
+
+    def __init__(self,d_model,num_heads,d_ff,use_rope=True,max_seq_len=1024,theta=10000):
+        super().__init__()
+
+        self.d_model = d_model
+        self.num_heads = num_heads
+        self.d_ff = d_ff
+
+        self.norm1 = rmsnorm(d_model = self.d_model)
+        self.norm2 = rmsnorm(d_model = self.d_model)
+        self.attn = multihead_self_attention(d_model = self.d_model, num_heads = self.num_heads, max_seq_len=max_seq_len, theta=theta,use_rope=use_rope)
+        self.ffn = positionwise_feedforward(d_model = self.d_model, d_ff = self.d_ff)
+
+
+    def forward(self,x):
+
+        block1_output = x + self.attn(self.norm1(x))
+        block2_output = block1_output + self.ffn(self.norm2(block1_output))
+
+        return block2_output
+```
+
+完善测试接口:
+```python
+# adapters.py
+
+def run_transformer_block(
+    d_model: int,
+    num_heads: int,
+    d_ff: int,
+    max_seq_len: int,
+    theta: float,
+    weights: dict[str, Tensor],
+    in_features: Float[Tensor, " batch sequence_length d_model"],
+) -> Float[Tensor, " batch sequence_length d_model"]:
+    """
+    Given the weights of a pre-norm Transformer block and input features,
+    return the output of running the Transformer block on the input features.
+
+    This function should use RoPE.
+    Depending on your implementation, you may simply need to pass the relevant args
+    to your TransformerBlock constructor, or you may need to initialize your own RoPE
+    class and pass that instead.
+
+    Args:
+        d_model (int): The dimensionality of the Transformer block input.
+        num_heads (int): Number of heads to use in multi-headed attention. `d_model` must be
+            evenly divisible by `num_heads`.
+        d_ff (int): Dimensionality of the feed-forward inner layer.
+        max_seq_len (int): Maximum sequence length to pre-cache if your implementation does that.
+        theta (float): RoPE parameter.
+        weights (dict[str, Tensor]):
+            State dict of our reference implementation.
+            The keys of this dictionary are:
+            - `attn.q_proj.weight`
+                The query projections for all `num_heads` attention heads.
+                Shape is (d_model, d_model).
+                The rows are ordered by matrices of shape (num_heads, d_k),
+                so `attn.q_proj.weight == torch.cat([q_heads.0.weight, ..., q_heads.N.weight], dim=0)`.
+            - `attn.k_proj.weight`
+                The key projections for all `num_heads` attention heads.
+                Shape is (d_model, d_model).
+                The rows are ordered by matrices of shape (num_heads, d_k),
+                so `attn.k_proj.weight == torch.cat([k_heads.0.weight, ..., k_heads.N.weight], dim=0)`.
+            - `attn.v_proj.weight`
+                The value projections for all `num_heads` attention heads.
+                Shape is (d_model, d_model).
+                The rows are ordered by matrices of shape (num_heads, d_v),
+                so `attn.v_proj.weight == torch.cat([v_heads.0.weight, ..., v_heads.N.weight], dim=0)`.
+            - `attn.output_proj.weight`
+                Weight of the multi-head self-attention output projection
+                Shape is (d_model, d_model).
+            - `ln1.weight`
+                Weights of affine transform for the first RMSNorm
+                applied in the transformer block.
+                Shape is (d_model,).
+            - `ffn.w1.weight`
+                Weight of the first linear transformation in the FFN.
+                Shape is (d_model, d_ff).
+            - `ffn.w2.weight`
+                Weight of the second linear transformation in the FFN.
+                Shape is (d_ff, d_model).
+            - `ffn.w3.weight`
+                Weight of the third linear transformation in the FFN.
+                Shape is (d_model, d_ff).
+            - `ln2.weight`
+                Weights of affine transform for the second RMSNorm
+                applied in the transformer block.
+                Shape is (d_model,).
+        in_features (Float[Tensor, "batch sequence_length d_model"]):
+            Tensor to run your implementation on.
+
+    Returns:
+        Float[Tensor, "batch sequence_length d_model"] Tensor with the output of
+        running the Transformer block on the input features while using RoPE.
+    """
+    # raise NotImplementedError
+    transformer_block = transformer.transformer_block(d_model=d_model, num_heads=num_heads, d_ff=d_ff, max_seq_len=max_seq_len, theta=theta)
+    transformer_block.norm1.weights.data = weights['ln1.weight']
+    transformer_block.norm2.weights.data = weights['ln2.weight']
+
+    transformer_block.attn.q_proj.weight.data = weights['attn.q_proj.weight']
+    transformer_block.attn.k_proj.weight.data = weights['attn.k_proj.weight']
+    transformer_block.attn.v_proj.weight.data = weights['attn.v_proj.weight']
+    transformer_block.attn.output_proj.weight.data = weights['attn.output_proj.weight']
+    transformer_block.ffn.w1_weight.data = weights['ffn.w1.weight']
+    transformer_block.ffn.w2_weight.data = weights['ffn.w2.weight']
+    transformer_block.ffn.w3_weight.data = weights['ffn.w3.weight']
+
+    return transformer_block(in_features)
+```
+
+运行测试`uv run pytest -k test_transformer_block`, 结果如下:
+```bash
+(base) zyli@lab:~/Stanford_CS336/assignment1-basics$ uv run pytest -k test_transformer_block
+========================================================================================== test session starts ==========================================================================================
+platform linux -- Python 3.13.5, pytest-8.4.1, pluggy-1.6.0
+rootdir: /home/zyli/Stanford_CS336/assignment1-basics
+configfile: pyproject.toml
+plugins: jaxtyping-0.3.2
+collected 48 items / 47 deselected / 1 selected                                                                                                                                                         
+
+tests/test_model.py::test_transformer_block PASSED
+
+=========================================================================================== warnings summary ============================================================================================
+tests/adapters.py:352
+  /home/zyli/Stanford_CS336/assignment1-basics/tests/adapters.py:352: SyntaxWarning: invalid escape sequence '\T'
+    rope_theta (float): The RoPE $\Theta$ parameter.
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+============================================================================== 1 passed, 47 deselected, 1 warning in 0.44s ==============================================================================
+(base) zyli@lab:~/Stanford_CS336/assignment1-basics$ 
+```
+警告可以忽略, 这应该是课程组在写注释的时候写了LaTeX风格的字符导致解析出问题
+
+
+### 完整的Transformer
+
+和上面一样, 中间的若干个`Transformer Block Layer`用nn.ModuleList`来实现
+
+```python
+# transformer.py
+class transformer_lm(nn.Module):
+
+    def __init__(self,d_model,num_heads,d_ff,vocab_size,context_length,num_layers,use_rope,max_seq_len=1024,theta=10000):
+        super().__init__()
+
+        self.d_model = d_model
+        self.num_heads = num_heads
+        self.d_ff = d_ff
+        self.vocab_size = vocab_size
+        self.context_length = context_length
+        self.num_layers = num_layers
+        self.max_seq_len = max_seq_len
+        self.theta = theta
+
+        self.Token_Embedding = Embedding(num_embeddings=self.vocab_size, embedding_dim = self.d_model)
+        self.layers = nn.ModuleList([transformer_block(d_model=self.d_model, num_heads=self.num_heads, d_ff=self.d_ff, use_rope=use_rope,max_seq_len=self.max_seq_len, theta=self.theta) for _ in range(self.num_layers)])
+        self.norm = rmsnorm(d_model = self.d_model)
+        self.linear = Linear(in_features=self.d_model, out_features=self.vocab_size)
+
+
+    def forward(self,x):
+
+        x = self.Token_Embedding(x)
+
+        for layer in self.layers:
+            x = layer(x)
+
+        x = self.norm(x)
+
+        x = self.linear(x)
+
+        # softmax_layer = Softmax(x, dimension=-1)
+        # return softmax_layer.forward()
+
+        return x
+```
+
+完善测试接口:
+
+```python
+# adapters.py
+def run_transformer_lm(
+    vocab_size: int,
+    context_length: int,
+    d_model: int,
+    num_layers: int,
+    num_heads: int,
+    d_ff: int,
+    rope_theta: float,
+    weights: dict[str, Tensor],
+    in_indices: Int[Tensor, " batch_size sequence_length"],
+) -> Float[Tensor, " batch_size sequence_length vocab_size"]:
+    """Given the weights of a Transformer language model and input indices,
+    return the output of running a forward pass on the input indices.
+
+    This function should use RoPE.
+
+    Args:
+        vocab_size (int): The number of unique items in the output vocabulary to be predicted.
+        context_length (int): The maximum number of tokens to process at once.
+        d_model (int): The dimensionality of the model embeddings and sublayer outputs.
+        num_layers (int): The number of Transformer layers to use.
+        num_heads (int): Number of heads to use in multi-headed attention. `d_model` must be
+            evenly divisible by `num_heads`.
+        d_ff (int): Dimensionality of the feed-forward inner layer (section 3.3).
+        rope_theta (float): The RoPE $\Theta$ parameter.
+        weights (dict[str, Tensor]):
+            State dict of our reference implementation. {num_layers} refers to an
+            integer between `0` and `num_layers - 1` (the layer index).
+            The keys of this dictionary are:
+            - `token_embeddings.weight`
+                Token embedding matrix. Shape is (vocab_size, d_model).
+            - `layers.{num_layers}.attn.q_proj.weight`
+                The query projections for all `num_heads` attention heads.
+                Shape is (num_heads * (d_model / num_heads), d_model).
+                The rows are ordered by matrices of shape (num_heads, d_k),
+                so `attn.q_proj.weight == torch.cat([q_heads.0.weight, ..., q_heads.N.weight], dim=0)`.
+            - `layers.{num_layers}.attn.k_proj.weight`
+                The key projections for all `num_heads` attention heads.
+                Shape is (num_heads * (d_model / num_heads), d_model).
+                The rows are ordered by matrices of shape (num_heads, d_k),
+                so `attn.k_proj.weight == torch.cat([k_heads.0.weight, ..., k_heads.N.weight], dim=0)`.
+            - `layers.{num_layers}.attn.v_proj.weight`
+                The value projections for all `num_heads` attention heads.
+                Shape is (num_heads * (d_model / num_heads), d_model).
+                The rows are ordered by matrices of shape (num_heads, d_v),
+                so `attn.v_proj.weight == torch.cat([v_heads.0.weight, ..., v_heads.N.weight], dim=0)`.
+            - `layers.{num_layers}.attn.output_proj.weight`
+                Weight of the multi-head self-attention output projection
+                Shape is ((d_model / num_heads) * num_heads, d_model).
+            - `layers.{num_layers}.ln1.weight`
+                Weights of affine transform for the first RMSNorm
+                applied in the transformer block.
+                Shape is (d_model,).
+            - `layers.{num_layers}.ffn.w1.weight`
+                Weight of the first linear transformation in the FFN.
+                Shape is (d_model, d_ff).
+            - `layers.{num_layers}.ffn.w2.weight`
+                Weight of the second linear transformation in the FFN.
+                Shape is (d_ff, d_model).
+            - `layers.{num_layers}.ffn.w3.weight`
+                Weight of the third linear transformation in the FFN.
+                Shape is (d_model, d_ff).
+            - `layers.{num_layers}.ln2.weight`
+                Weights of affine transform for the second RMSNorm
+                applied in the transformer block.
+                Shape is (d_model,).
+            - `ln_final.weight`
+                Weights of affine transform for RMSNorm applied to the output of the final transformer block.
+                Shape is (d_model, ).
+            - `lm_head.weight`
+                Weights of the language model output embedding.
+                Shape is (vocab_size, d_model).
+        in_indices (Int[Tensor, "batch_size sequence_length"]) Tensor with input indices to run the language model on. Shape is (batch_size, sequence_length), where
+            `sequence_length` is at most `context_length`.
+
+    Returns:
+        Float[Tensor, "batch_size sequence_length vocab_size"]: Tensor with the predicted unnormalized
+        next-word distribution for each token.
+    """
+    transformerlm = transformer.transformer_lm(d_model=d_model,num_heads=num_heads,d_ff=d_ff,vocab_size=vocab_size,
+    context_length=context_length,num_layers=num_layers,use_rope=True,theta=rope_theta)
+
+    transformerlm.Token_Embedding.weight.data = weights['token_embeddings.weight']
+    for layer_idx in range(num_layers):
+        block = transformerlm.layers[layer_idx]
+
+        # Attention weights
+        block.attn.q_proj.weight.data = weights[f'layers.{layer_idx}.attn.q_proj.weight']
+        block.attn.k_proj.weight.data = weights[f'layers.{layer_idx}.attn.k_proj.weight']
+        block.attn.v_proj.weight.data = weights[f'layers.{layer_idx}.attn.v_proj.weight']
+        block.attn.output_proj.weight.data = weights[f'layers.{layer_idx}.attn.output_proj.weight']
+        
+        # RMSNorm weights
+        block.norm1.weights.data = weights[f'layers.{layer_idx}.ln1.weight']
+        block.norm2.weights.data = weights[f'layers.{layer_idx}.ln2.weight']
+        
+        # FFN weights
+        block.ffn.w1_weight.data = weights[f'layers.{layer_idx}.ffn.w1.weight']
+        block.ffn.w2_weight.data = weights[f'layers.{layer_idx}.ffn.w2.weight']
+        block.ffn.w3_weight.data = weights[f'layers.{layer_idx}.ffn.w3.weight']
+
+    transformerlm.norm.weights.data = weights['ln_final.weight']
+    transformerlm.linear.weight.data = weights['lm_head.weight']
+
+    return transformerlm(in_indices)
+    # raise NotImplementedError
+```
+
+运行测试`uv run pytest -k test_transformer_lm`, 结果如下:
+```bash
+(base) zyli@lab:~/Stanford_CS336/assignment1-basics$ uv run pytest -k test_transformer_lm
+========================================================================================== test session starts ==========================================================================================
+platform linux -- Python 3.13.5, pytest-8.4.1, pluggy-1.6.0
+rootdir: /home/zyli/Stanford_CS336/assignment1-basics
+configfile: pyproject.toml
+plugins: jaxtyping-0.3.2
+collected 48 items / 46 deselected / 2 selected                                                                                                                                                         
+
+tests/test_model.py::test_transformer_lm PASSED
+tests/test_model.py::test_transformer_lm_truncated_input PASSED
+
+=================================================================================== 2 passed, 46 deselected in 0.46s ====================================================================================
+```
+
+
+## 计算次数估算
+
+模型训练的时候, 绝大部分运算都是矩阵乘法里面的数值乘法运算, 注意以下事实:
+如果$$A \in \mathbb{R}^{m \times n}$$, $$B \in \mathbb{R}^{n \times p}$$, 那么$$A \times B$$的计算次数是$$2 \times m \times n \times p$$
+
+### 参数数量计算和内存用量
+考虑第一个问题, 对于以下配置的$$GPT-2 XL$$, 有多少个可训练的参数? 如果每个参数都是单精度浮点数, 那么读取这个模型需要多少内存?
+
+```
+vocab_size = 50257
+context_length = 1024
+num_layers = 48
+d_model = 1600
+nun_heads = 25
+d_ff = 6400
+```
+
+对于`Embedding Layer`, 有$$vocabsize \times d_{model}$$个参数
+```
+50257 * 1600 = 80,411,200
+```
+
+对于一个`Transformer Block`, 有两个`RMSNorm`, 每个`RMSNorm`有$$d_{model}$$个参数, 有一个`multihead_self_attention`, 其中有四个矩阵$$Q,K,V,output$$, 参数量总共为$$4*d_{model}*d_{model}$$, 对于`positionwise_feedforward`, 有两个矩阵, 总参数量为$2*d_{ff}*d_{model}$
+```
+2 * 1600 + 4 * 1600 * 1600 + 2 * 1600 * 6400 = 3200 + 10240000 + 20480000 = 30,723,200
+```
+
+除此之外, 输出前还有一个`RMSNorm`,一个`Linear`, 总参数量为$$d_{model} + d_{model}*vocabsize$$
+```
+1600 + 1600 * 50257 = 80,412,800
+```
+
+故总共有
+```
+80411200 + 30723200 * 48 + 80412800 = 1,635,537,600
+```
+大概1.6B的参数量
+
+```
+1,635,537,600 * 4 /1024 /1024 /1024 = 6.1GB
+```
+
+需要内存约6.1GB
+
+### FLOPS次数估计
+
+如果这个模型前向传播一次, 需要多少次FLOPS?
+
+在一个`transformer_block`中, 一次`multihead_self_attention`的计算次数由以下部分组成:
+```
+Q投影: 2 * seq_len * d_model * d_model
+K投影: 2 * seq_len * d_model * d_model
+V投影: 2 * seq_len * d_model * d_model
+输出投影: 2 * seq_len * d_model * d_model
+QK^T: 2 * seq_len * seq_len * d_model
+Attn V: 2 * seq_len * seq_len * d_model
+共计8 * seq_len * d_model² + 4 * seq_len² * d_model = 20,971,520,000 + 67,108,864,000 = 88,080,384,000
+```
+
+一次`positionwise_feedforward`的计算次数由以下部分组成:
+```
+w_1x: 2 * seq_len * d_model * d_ff
+W_3x: 2 * seq_len * d_model * d_ff
+W2 @ (SiLU(W1x) ⊙ W3x): 2 * seq_len * d_model * d_ff
+共计6 * seq_len * d_model * d_ff = 62,914,560,000
+```
+
+输出前有一个`Output_Embedding`的线性层, 计算次数为
+```
+2 * seq_len * d_model * vocab_size = 164,682,137,600
+```
+
+代入配置, 得到
+```
+48 * (88,080,384,000 + 62,914,560,000) + 164,682,137,600 = 7,412,439,449,600
+```
+
+大约7.4TeraFLOPs
