@@ -1,0 +1,60 @@
+---
+title: 'UC Berkeley CS189 Assignment 1(Part 2)'
+description: 'CS189 Assignment1 Notes'
+publishDate: '2026-2-1'
+tags: ['CS189']
+# heroImage: { src: './thumbnail.jpg', alt: '作业封面图片' }
+# heroImage: {}
+language: '中文'
+draft: true
+---
+
+# CS189 Assignment1
+
+part2和part1其实差不多, 只是更深入的去实现一些机器学习的基本模型
+
+## Assignment Overview
+
+本部分代码位于`fashion_pt_2.ipynb`里面
+
+## 加载MNIST数据集
+
+用`torchvision`调用api即可
+
+```python
+# Load the FashionMNIST training dataset
+train_data = torchvision.datasets.FashionMNIST(root='./data', train=True, download=True)
+images = train_data.data.numpy().astype(float)  # Convert images to numpy array
+targets = train_data.targets.numpy()  # Extract labels
+class_dict = {i:class_name for i,class_name in enumerate(train_data.classes)}
+labels = np.array([class_dict[t] for t in targets])  # Map labels to class names
+n = len(images)  # Total samples
+class_names = list(class_dict.values())
+print(f"Loaded FashionMNIST with {n} samples. Classes: {class_dict}")
+print("Classes: {}".format(class_dict))
+print("Image shape: {}".format(images[0].shape))
+print("Image dtype: {}".format(images[0].dtype))
+
+
+# Creating a DataFrame with the images and labels
+df = pd.DataFrame({"image": images.tolist(), "label": labels})
+# Cast image as numpy array
+df['image'] = df['image'].apply(lambda x: np.array(x).reshape(-1))
+```
+
+注意一般来说对于这种加载出来的数据集, 我们都要把他的特征列和`label`列转化成`numpy`数组, 然后再用这两个(也许不止两个)数组构造`DataFrame`
+
+```
+Loaded FashionMNIST with 60000 samples. Classes: {0: 'T-shirt/top', 1: 'Trouser', 2: 'Pullover', 3: 'Dress', 4: 'Coat', 5: 'Sandal', 6: 'Shirt', 7: 'Sneaker', 8: 'Bag', 9: 'Ankle boot'}
+Classes: {0: 'T-shirt/top', 1: 'Trouser', 2: 'Pullover', 3: 'Dress', 4: 'Coat', 5: 'Sandal', 6: 'Shirt', 7: 'Sneaker', 8: 'Bag', 9: 'Ankle boot'}
+Image shape: (28, 28)
+Image dtype: float64
+```
+
+
+## 训练一个2层MLP分类器
+
+这部分实验文档让我们直接copy part1当中problem 3c的代码, 因为他在这里的目的只是需要这个分类器为后面的代码做铺垫, 所以就不再重述代码了, 在part1的notes当中复制3c的代码过来即可
+
+## Problem 5a
+
