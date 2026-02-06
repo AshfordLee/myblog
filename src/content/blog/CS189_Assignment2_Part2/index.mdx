@@ -13,3 +13,201 @@ draft: true
 
 ## 项目描述 
 TODO:
+
+## Part1代码复用
+
+这里要用到`subselect_battles`函数, 直接从part1复制过来就行, 不再赘述了
+
+## Problem 4
+
+### 概率建模
+
+我们希望先搞一个LeaderBoard, 对于每一个模型m, 能给他一个"strength score" $$S_m$$, 这个score能反应:
+
+```
+-- score的排名反映了此模型对战另一个模型时的胜率
+
+-- 量化的看, 对于模型A和B, A战胜B的概率应该是$$S_A - S_B$$的函数
+```
+
+换言之, 我们希望找到一个函数$$f$$使得:
+$$
+P(A \,\, beats \,\, B) = f(S_A - S_B)
+$$
+
+比如说用sigmoid函数:
+$$
+P(A \,\, beats \,\, B) = \frac{1}{1 + e^{-(S_A - S_B)}}
+$$
+
+本质上这就是学习一个logistic regression
+
+### 数据结构设计
+
+可以把一行数据表示为这种数据结构:
+
+```
+-- 一个feature vector表示两个model
+
+-- 一个label表示胜出的模型
+```
+
+举个例子, 原始的行为:
+```
+row = {'model_a': 'gpt-4o-2024-05-13', 'model_b': 'claude-3-opus-20240229', 'winner': 'model_a'}`
+```
+
+可表述为这两行(两行是因为PK是相互的, A赢了B同时也代表B赢了A)
+
+```
+Feature 1:[1, -1]
+Label: 1
+```
+index 0 表示gpt, index 1表示claude, 1表示gpt胜出
+
+```
+Feature 2:[-1, 1]
+Label: 0
+```
+index 0 表示gpt, index 1表示claude, 0表示claude未胜出
+
+通俗一点的说就是如果`Label`是站在`feature = 1`的视角来看的, 如果1赢了-1, 那么`Label`就是1, 如果1输了, 那么`Label`就是0
+
+为什么同一行要解释成两个不同的feature vector呢? 对于含有A,B模型的一行, 我们可能要建模
+$$
+P(A \,\, beats \,\, B) = \sigma(S_A - S_B)
+P(B \,\, beats \,\, A) = \sigma(S_B - S_A)
+$$
+
+显然这两个feature vector就是`[S_A - S_B, S_B - S_A]`的系数矩阵
+
+$$
+\begin{bmatrix}
+1 & -1 \\
+-1 & 1
+\end{bmatrix}
+$$
+
+
+### 多个模型的情况
+
+假如有多个模型, 也只不过是把所有的Feature Vector和Label(以前面那种方法得到的)组成X和y而已
+
+比如说有5个模型
+```
+索引:    0         1          2        3         4
+模型:  [GPT-4o, Claude-3, Gemini, Llama-3, PaLM-2]
+```
+如果GPT赢了Claude, 那么对应的Feature Vector和Label应该是
+
+```
+[+1, 0, 0, -1, 0], 1
+[-1, 0, 0, +1, 0], 0
+```
+
+没参加PK的模型的值赋为0即可
+
+## Problem 4a
+
+遍历每一行, 对于每一行再去遍历所有的models, 遍历到model_a就记为1, model_b就记为-1, 其他的就记为0, 再根据winner打个标就行
+
+```python
+def turn_into_features(df, models):
+    '''
+    Convert pairwise battle results into feature matrix X and label vector y
+    suitable for logistic regression based on the Bradley-Terry model
+    '''
+    # TODO:
+    # 1. Iterate through each row in the DataFrame.
+    # 2. For each battle, create a feature vector:
+    #    - Assign +1 to the column corresponding to 'model_a'.
+    #    - Assign -1 to the column corresponding to 'model_b'.
+    #    - All other columns should be 0.
+    # 3. Append the label:
+    #    - 1 if 'model_a' is the winner.
+    #    - 0 if 'model_b' is the winner.
+    # 4. Return the feature matrix X and label vector y as numpy arrays.
+    X = []
+    y = []
+
+
+    for _ ,row in df.iterrows():
+        a=row['model_a']
+        b=row['model_b']
+
+        win_a=1 if row['winner']==a else 0
+
+        x_ab=[1 if col==a else -1 if col==b else 0 for col in models]
+
+        y_ab=win_a
+
+        x_ba=[1 if col==b else -1 if col==a else 0  for col in models]
+
+        y_ba=1-win_a
+
+        X.append(x_ab)
+        y.append(y_ab)
+        X.append(x_ba)
+        y.append(y_ba)
+    return np.array(X), np.array(y)
+
+X, y = turn_into_features(selected_battles_no_ties, selected_models)
+X.shape, y.shape
+```
+
+注意为什么两个y是互斥的, 因为都是站在每一个feature = 1的视角去看, 如果第一个feature = 1赢了-1, 那么第二个feature = 1肯定就输了, 所以一定是互斥的
+
+
+```python
+X
+```
+
+```
+array([[ 0,  0,  0, ...,  0,  0, -1],
+       [ 0,  0,  0, ...,  0,  0,  1],
+       [ 0,  0,  0, ...,  0,  1,  0],
+       ...,
+       [-1,  0,  0, ...,  0,  0,  0],
+       [ 0,  0,  0, ...,  0,  0,  0],
+       [ 0,  0,  0, ...,  0,  0,  0]], shape=(51066, 20))
+```
+
+这个标签的设计是合理的, 假设feature vector是[1,-1]而A赢了, 那么label是1, 此时当然也希望$$\sigma(S_A - S_B)$$是接近于1的
+
+
+## Problem 4b
+
+用`LogisticRegression`来训练即可
+```python
+from sklearn.linear_model import LogisticRegression
+
+
+model = LogisticRegression(fit_intercept=False)
+scores = model.fit(X,y).coef_[0]
+
+results = {"Model": selected_models, "Score": scores}
+results_df = pd.DataFrame(results).sort_values("Score", ascending=False).reset_index(drop=True)
+results_df
+```
+
+<img src="/images/189_hw2/189_hw2_15.png" alt="label_plot" />
+
+解释一下为什么对于两个模型A和B, 输出
+$$
+\sigma(S_A - S_B)
+$$
+就代表A战胜B的概率, 这和我们之前设计的特征工程有关, 比如说训练集上所有情况下A都战胜了B, 那么feature vector和label都为[1,-1]和1, 也就是说训练得到的[w_1, w_2]大概率会满足
+$$
+\sigma(
+\begin{pmatrix}
+1,-1
+\end{pmatrix}
+
+\begin{pmatrix}
+w_1 \\
+w_2
+\end{pmatrix})
+= 1
+$$
+
+由于特征工程的设计，权重向量 $\mathbf{w}$ 中的每个元素 $w_i$ 就是模型 $i$ 的 strength $S_i$。因此 $\sigma(S_A - S_B)$ 直接给出了 A 战胜 B 的预测概率。
