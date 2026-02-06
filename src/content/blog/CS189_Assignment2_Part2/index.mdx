@@ -211,3 +211,209 @@ w_2
 $$
 
 由于特征工程的设计，权重向量 $\mathbf{w}$ 中的每个元素 $w_i$ 就是模型 $i$ 的 strength $S_i$。因此 $\sigma(S_A - S_B)$ 直接给出了 A 战胜 B 的预测概率。
+
+## Problem 5a
+
+我们要用重采样的方式来重复训练逻辑回归模型, 每个逻辑回归模型会给我们这些LLM一组分数, 在得到许多组分数之后, 我们就可以得到每个LLM的分数和置信区间
+
+举个例子, 每次训练完成之后, 逻辑回归模型会给gpt4o这个模型一个分数, 假如我们训练了一百次逻辑回归, 那就会有一百个分数, 我们可以取这个分数的均值, 还可以取2.5%分位数和97.5%分位数, 得到置信区间
+
+```python
+def get_bootstrapped_score(X, y, models, category_name="Overall", n_bootstrap=10):
+    """
+    Bootstraps logistic regression model scores to estimate confidence intervals.
+    Args:
+        X: Feature matrix
+        y: Labels
+        models: List of model names (order matches columns of X)
+        n_bootstrap: Number of bootstrap samples
+    Returns:
+        results_df: DataFrame with Model, Average Score, Lower Bound, Upper Bound
+        mean_scores: Mean of bootstrapped scores (np.array)
+        confidence_intervals: 2.5 and 97.5 percentiles (np.array shape [2, n_models])
+    """
+    #TODO
+
+    np.random.seed(189)  # for reproducibility
+    bootstrap_scores = []
+    for i in range(n_bootstrap):
+        indices = np.random.choice(len(X), size=len(X), replace=True)
+        X=X[indices]
+        y=y[indices]
+        model = LogisticRegression(fit_intercept=False)
+        model.fit(X,y)
+        bootstrap_scores.append(model.coef_[0])
+    bootstrap_scores = np.array(bootstrap_scores)
+    mean_scores = bootstrap_scores.mean(axis=0)
+    confidence_intervals = np.percentile(bootstrap_scores, [2.5, 97.5], axis=0)
+
+    results = {
+        "Model": models,
+        "Average Score": mean_scores,
+        "Lower Bound": confidence_intervals[0],
+        "Upper Bound": confidence_intervals[1],
+        "Category": category_name,
+    }
+    results_df = pd.DataFrame(results)
+    return results_df, mean_scores, confidence_intervals
+results_df, mean_scores, confidence_intervals = get_bootstrapped_score(X, y, selected_models, n_bootstrap=10)
+
+# Test that confidence intervals make sense
+assert (confidence_intervals[0] <= confidence_intervals[1]).all(), "Every lower bound must be <= upper bound."
+assert ((confidence_intervals[0] <= mean_scores) & (mean_scores <= confidence_intervals[1])).all(), "Each mean score should lie within its CI."
+```
+
+代码写起来也简单, 只要注意一下`np.percentile`的用法就行
+
+可视化每个模型的置信区间:
+
+<img src="/images/189_hw2/189_hw2_16.png" alt="label_plot" />
+
+在之前的单次实验当中, 虽然llama-3-70b-instruct的分数最高, 但是从这个图看来, 最好的应该是gemini-1.5-pro-exp-0801(我主观上也这么认为)
+
+## Problem 5b
+
+有了置信区间, 我们可以比较保守的给出一个A模型好于B模型的定义, 即若A的`Lower Bound`大于B的`Upper Bound`, 那么我们就认为A好于B, 我们可以根据这个规则给出rank
+
+注意这里的代码需要遍历两次, 对于每个模型, 还要遍历除了他之外的所有模型, 逐个比较强弱关系, 我们用count来记录A模型超过了多少其他模型, 注意这个条件十分严格, 一定要置信区间下界大于其他模型的上界才行
+
+```python
+def assign_rank(row, df=results_df):
+    """
+    Input:
+        row : pd.Series
+            A row of the DataFrame (representing a model’s metrics).
+        df : pd.DataFrame (default = results_df)
+            DataFrame containing model performance with 'Lower Bound' and 'Upper Bound'.
+
+    Output:
+        int : The rank of the model, defined as (# of models confidently better) + 1.
+    """
+
+    count = 0
+    for _,row2 in df.iterrows():
+        if row['Lower Bound'] > row2['Upper Bound']:
+            count+=1
+
+    return count
+
+
+results_df['Rank'] = results_df.apply(lambda r: assign_rank(r, results_df), axis=1)
+results_df = results_df.sort_values(by="Rank", ascending=True)
+results_df
+```
+
+<img src="/images/189_hw2/189_hw2_17.png" alt="label_plot" />
+
+注意结果上有很多比较好的模型都并列rank = 0了
+
+## Problem 7a
+
+假设我们现在收到的对话语料的格式为:
+```
+conv_example = {
+    "conversation": [
+        {"role": "user", "content": "How do I sum a list in Python?"},
+        {"role": "assistant", "content": "Use the built-in function: sum(your_list)."}
+    ]
+}
+```
+
+需要计算所有role == assistant的content的token长度, 这里题目告诉我们调用gpt2的分词器即可
+
+```python
+import tiktoken
+def calculate_response_length(conv):
+    enc=tiktoken.get_encoding('gpt2')
+
+    assistant_contents=[msg['content'] for msg in conv['conversation'] if msg['role']=='assistant']
+
+    joined_text="\n\n".join(assistant_contents)
+
+    tokens=enc.encode(joined_text,disallowed_special=())
+
+    return len(tokens)
+```
+
+先按照条件筛选, 然后把每条句子join起来, 用分词器编码之后返回长度即可
+
+## Problem 7b
+
+回忆一下我们的PK数据的格式, 每一行当中有这四列:
+```
+model_a model_b conversation_a conversation_b
+```
+
+现在希望把`model_a`和`conversation_a`分出来, 计算一下`conversation_a`的token长度(用7a实现的那个函数), 对`conversation_b`也做同样的操作, 然后竖着`concat`起来, 相当于以前有n行, 处理之后变成2n行了
+
+```python
+#TODO: 
+battles_a = selected_battles_no_ties[['conversation_a','model_a']].rename(columns={'conversation_a':'conversation','model_a':'model'})
+
+battles_a['response_length']=battles_a['conversation'].apply(lambda c:calculate_response_length({'conversation':c}))
+
+battles_b = selected_battles_no_ties[['conversation_b','model_b']].rename(columns={'conversation_b':'conversation','model_b':'model'})
+
+battles_b['response_length']=battles_b['conversation'].apply(lambda c:calculate_response_length({'conversation':c}))
+
+per_model_battles=pd.concat([battles_a,battles_b])
+per_model_battles.head()
+```
+
+<img src="/images/189_hw2/189_hw2_18.png" alt="label_plot" />
+
+注意这个conversation是个比较复杂的嵌套结构, 可以理解为他是一个list, 当中的每一个值是User/Assistant说的一句话
+
+```
+[{'content': 'Is there any Artificial Superintelligence?', 'num_tokens': 7, 'role': 'user'}
+ {'content': "As a large language model, I am not able to provide an opinion or belief on whether or not artificial superintelligence exists. The concept of artificial superintelligence is a topic of much debate and speculation.\n\nHere's what we know:\n\n* **Current AI:** Today's AI, including myself, is very good at specific tasks, like generating text, translating languages, and playing games. However, we lack the general intelligence and common sense of humans.\n* **Superintelligence Definition:** Artificial superintelligence is generally defined as an AI that surpasses human intelligence in all aspects. This includes things like problem-solving, creativity, and learning.\n* **No Consensus:** There is no scientific consensus on whether or not artificial superintelligence is possible or even desirable. Some experts believe it is inevitable, while others believe it is highly unlikely or even dangerous.\n\nThe development of artificial superintelligence is a complex and multifaceted issue with profound implications for society. It is important to continue to have open and honest discussions about the potential benefits and risks of this technology.", 'num_tokens': 208, 'role': 'assistant'}
+ {'content': 'What is your knowledge cutoff date?', 'num_tokens': 7, 'role': 'user'}
+ {'content': "I can access pretty up-to-date information, which means I don't really have a knowledge cut-off date. However, keep in mind:\n\n* **I am not constantly updating:** I don't have real-time information like a search engine. My knowledge is based on the massive dataset I was trained on.\n\n* **Training data has a limit:** That training dataset does have a point in time when it was last updated. While it's extensive, there will always be newer information I'm not aware of.\n\nSo, while I strive to be as current as possible, it's best to double-check anything time-sensitive with a reliable source.", 'num_tokens': 127, 'role': 'assistant'}]
+```
+
+按照之前得到的LLM的rank顺序, plot每个模型的token长度:
+
+```python
+model_lineup = results_df.sort_values("Rank")['Model'].tolist()
+avg_lengths = per_model_battles.groupby("model")["response_length"].mean().reset_index()
+avg_lengths["model"] = pd.Categorical(avg_lengths["model"], categories=model_lineup, ordered=True)
+avg_lengths = avg_lengths.sort_values("model").reset_index(drop=True)
+
+# Add a numeric rank column for trendline fitting
+avg_lengths["rank"] = avg_lengths.index + 1  # 1 = best, etc.
+
+# Fit a linear trendline (polyfit) to the response length vs. rank
+z = np.polyfit(avg_lengths["rank"], avg_lengths["response_length"], 1)
+p = np.poly1d(z)
+trendline = p(avg_lengths["rank"])
+
+fig = go.Figure()
+
+fig.add_trace(go.Scatter(
+    x=avg_lengths["model"],
+    y=avg_lengths["response_length"],
+    mode='lines+markers',
+    name='Avg Response Length'
+))
+
+fig.add_trace(go.Scatter(
+    x=avg_lengths["model"],
+    y=trendline,
+    mode='lines',
+    name='Trendline',
+    line=dict(dash='dash', color='red')
+))
+
+fig.update_layout(
+    title="Average Response Length of Models (with Trendline)",
+    xaxis_title="Model (sorted by performance)",
+    yaxis_title="Average Response Length",
+    xaxis_tickangle=45,
+    yaxis=dict(range=[0, max(avg_lengths["response_length"].max(), trendline.max()) * 1.05])  # y-axis starts at 0
+)
+
+fig.show()
+```
+<img src="/images/189_hw2/189_hw2_19.png" alt="label_plot" />
+
+可以看出模型好坏和对话的token长度并无直接关系
