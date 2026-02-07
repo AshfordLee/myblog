@@ -1,0 +1,80 @@
+---
+title: 'UC Berkeley CS189 Assignment 3'
+description: 'CS189 Assignment3 Notes'
+publishDate: '2026-2-7'
+tags: ['CS189']
+# heroImage: { src: './thumbnail.jpg', alt: '作业封面图片' }
+# heroImage: {}
+language: '中文'
+draft: true
+---
+
+# CS189 Assignment 3
+
+
+## 项目描述
+
+这个lab主要聚焦于实现优化器和反向传播(逐项求导), 和CS336的lab1当中的实现类似
+
+## 例子: 多元微分
+
+我们用课程组给出的例子来复习一下多元微分
+
+<img src="/images/189_hw3/189_hw3_1.png" alt="label_plot" />
+
+中间变量是从`v1`到`v7`
+
+$$
+\frac{\partial v_7}{\partial v_7} = 1
+$$
+
+$$
+v_7 = v_6 - v_5 \implies \frac{\partial v_7}{\partial v_6} = 1, \quad \frac{\partial v_7}{\partial v_5} = -1
+$$
+
+$$
+v_6 = v_4 + v_3 \implies \frac{\partial v_6}{\partial v_4} = 1, \quad \frac{\partial v_6}{\partial v_3} = 1
+$$
+
+$$
+\frac{\partial v_7}{\partial v_4} = \frac{\partial v_7}{\partial v_6} \cdot \frac{\partial v_6}{\partial v_4} = 1 \cdot 1 = 1
+$$
+
+$$
+\frac{\partial v_7}{\partial v_3} = \frac{\partial v_7}{\partial v_6} \cdot \frac{\partial v_6}{\partial v_3}
+$$
+
+$$
+\frac{\partial v_6}{\partial v_3} = \frac{\partial v_6}{\partial v_3} + \frac{\partial v_6}{\partial v_4} \cdot \frac{\partial v_4}{\partial v_3} = 1 + e^{v_3}
+$$
+
+$$
+\frac{\partial v_7}{\partial v_3} = 1 + e^{v_3}
+$$
+
+$$
+\frac{\partial v_7}{\partial v_2} = \frac{\partial v_7}{\partial v_6} \cdot \frac{\partial v_6}{\partial v_2} + \frac{\partial v_7}{\partial v_5} \cdot \frac{\partial v_5}{\partial v_2} 
+= \frac{\partial v_6}{\partial v_2} - \frac{\partial v_5}{\partial v_2} = \frac{\partial v_6}{\partial v_2} - \cos(v_2)
+$$
+
+$$
+\frac{\partial v_6}{\partial v_2} = \frac{\partial v_6}{\partial v_4} \cdot \frac{\partial v_4}{\partial v_2} + \frac{\partial v_6}{\partial v_3} \cdot \frac{\partial v_3}{\partial v_2} = \frac{\partial v_4}{\partial v_2} + \frac{\partial v_3}{\partial v_2}
+= \frac{\partial v_4}{\partial v_3} \cdot \frac{\partial v_3}{\partial v_2} + v_1
+= e^{v_3} \cdot v_1 + v_1
+$$
+
+$$
+\frac{\partial v_7}{\partial v_1} = \frac{\partial v_7}{\partial v_6} \cdot \frac{\partial v_6}{\partial v_1}
+= \frac{\partial v_6}{\partial v_1} 
+= \frac{\partial v_6}{\partial v_4} \cdot \frac{\partial v_4}{\partial v_1} + \frac{\partial v_6}{\partial v_3} \cdot \frac{\partial v_3}{\partial v_1}
+= \frac{\partial v_4}{\partial v_1} + \frac{\partial v_3}{\partial v_1}
+= \frac{\partial v_4}{\partial v_3} \cdot \frac{\partial v_3}{\partial v_1} + \frac{\partial v_3}{\partial v_1} \\
+= e^{v_3} \cdot v_2 + v_2
+$$
+
+所谓反向传播就是把每一次算出来的中间结果记住, 然后用链式法则一步步的向前求导,比如说最初的输入是`x,y`, 输出是`z`, 通过计算`z`对一大堆中间变量的偏导数, 最终计算得到
+$$
+\frac{\partial z}{\partial x} \,\,and \,\, \frac{\partial z}{\partial y}
+$$
+
+如果对上面的求偏导过程有疑问, 建议去看一看微积分(下)或者数学分析(三)
