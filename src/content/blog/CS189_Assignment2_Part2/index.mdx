@@ -6,13 +6,16 @@ tags: ['CS189']
 # heroImage: { src: './thumbnail.jpg', alt: '作业封面图片' }
 # heroImage: {}
 language: '中文'
-draft: true
+draft: false
 ---
 
 # CS189 Assignment 2 
 
 ## 项目描述 
-TODO:
+书接上回, 这个lab里我们主要关心两个问题:
+
+- 如何对模型的能力建模, 即如何通过PK当中模型的输赢情况以及一些潜在的其他特征, 通过逻辑回归的方式给每个模型一个能力分数
+- 新特征对模型能力的影响, 如果加入一些额外的特征, 模型的排名会发生什么变化
 
 ## Part1代码复用
 
@@ -417,3 +420,384 @@ fig.show()
 <img src="/images/189_hw2/189_hw2_19.png" alt="label_plot" />
 
 可以看出模型好坏和对话的token长度并无直接关系
+
+
+## Problem 8a
+
+从`conv_metadata`字段当中拿到一些额外的特征, 先给出一个正则化函数`normdiff`, 相当于计算出两个model的某一个特征得分之差
+
+$$
+\text{normdiff}(a, b) =
+\begin{cases}
+0 & \text{if } a + b = 0 \\[6pt]
+\dfrac{a - b}{a + b} & \text{otherwise}
+\end{cases}
+$$
+
+先看一下在这个嵌套字段`conv_metadata`当中有什么
+
+```python
+selected_battles_no_ties['conv_metadata'].iloc[0]
+```
+
+```
+{'bold_count_a': {'**': 5, '__': 0},
+ 'bold_count_b': {'**': 0, '__': 0},
+ 'context_a_tokens': 222,
+ 'context_b_tokens': 230,
+ 'header_count_a': {'h1': 0, 'h2': 0, 'h3': 0, 'h4': 0, 'h5': 0, 'h6': 0},
+ 'header_count_b': {'h1': 0, 'h2': 0, 'h3': 0, 'h4': 0, 'h5': 0, 'h6': 0},
+ 'list_count_a': {'ordered': 0, 'unordered': 5},
+ 'list_count_b': {'ordered': 0, 'unordered': 0},
+ 'sum_assistant_a_tokens': 335,
+ 'sum_assistant_b_tokens': 287,
+ 'sum_user_tokens': 14,
+ 'turns': 2}
+```
+
+
+总之就是定义了一些特征, 然后分别在两个model上去计算这些特征, 需要注意的一点是, 特征的计算方式是求和计算, 比如说我想通过`blod_count_a`计算得到`bold_a`, 那在上面这个例子上应该是5+0=5
+
+```python
+def add_style_features(df):
+    """
+    Adds normalized style feature difference columns to the DataFrame.
+    The columns added are:
+      - style_bold_count
+      - style_header_count
+      - style_list_count
+      - style_sum_assistant_tokens
+    """
+    def normdiff(a, b):
+        denom = a + b
+        return 0 if denom == 0 else (a - b) / denom
+
+    
+    style_bold = []
+    style_header = []
+    style_list = []
+    style_tokens = []
+    for idx, row in df.iterrows():
+
+        meta=row['conv_metadata']
+
+        bold_a=sum(meta['bold_count_a'].values())
+        bold_b=sum(meta['bold_count_b'].values())
+
+        header_a=sum(meta['header_count_a'].values())
+        header_b=sum(meta['header_count_b'].values())
+
+        list_a=sum(meta['list_count_a'].values())
+        list_b=sum(meta['list_count_b'].values())
+
+        tokens_a=meta['sum_assistant_a_tokens']
+        tokens_b=meta['sum_assistant_b_tokens']
+
+        style_bold.append(normdiff(bold_a,bold_b))
+        style_header.append(normdiff(header_a,header_b))
+        style_list.append(normdiff(list_a,list_b))
+        style_tokens.append(normdiff(tokens_a,tokens_b))
+
+
+
+        
+        
+    df["style_bold_count"] = style_bold
+    df["style_header_count"] = style_header
+    df["style_list_count"] = style_list
+    df["style_sum_assistant_tokens"] = style_tokens
+    return df
+
+# Example usage:
+selected_battles_no_ties = add_style_features(selected_battles_no_ties)
+```
+
+
+## Problem 8b
+
+接下来我们要重构一下数据的格式, 把原来的一行拆成两行, 例如
+
+<img src="/images/189_hw2/189_hw2_20.png" alt="label_plot" />
+
+这应该比较简单, 别忘了我们已经有了`style_feature_cols`那些字段, 我们只要和之前一样做出X,y和direction, 然后for循环`style_feature_cols`拿到我们刚才通过`norm_diff`计算的一些额外特征就行了
+
+```python
+def make_pairwise_feature_df(df, models, style_feature_cols):
+    """
+    For each row in df, create two rows in the output:
+      - One for A->B (original direction)
+      - One for B->A (flipped direction)
+    Each row contains:
+      - question_id
+      - X: model indicator vector (1 for model_a, -1 for model_b, 0 otherwise)
+      - y: 1 if model_a wins, 0 if model_b wins
+      - style features (from style_feature_cols)
+      - direction: "A->B" or "B->A"
+    Returns a new DataFrame with only these columns.
+    """
+    ...
+    records = []
+    for idx, row in df.iterrows():
+        # X vector for A->B and B->A
+        x_a_b=[1 if row['model_a']==model else -1 if row['model_b']==model else 0 for model in models]
+        x_b_a=[-1 if row['model_a']==model else 1 if row['model_b']==model else 0 for model in models]
+        # y for A->B and B->A
+        y_a_b=1 if row['winner']=='model_a' else 0
+        y_b_a=1 if  y_a_b==0 else 1
+        # Style features for A->B, B->A
+        style_ab=row[style_feature_cols].to_numpy(dtype=float)
+        style_ba=-style_ab
+
+        rec_a={
+          "question_id":row['question_id'],
+          "X":x_a_b,
+          "y":y_a_b,
+          "direction":"A->B",
+        }
+
+        for col,val in zip(style_feature_cols,style_ab):
+          rec_a[col]=val
+
+        rec_b={
+          "question_id":row['question_id'],
+          "X":x_b_a,
+          "y":y_b_a,
+          "direction":"B->A",
+        }
+
+        for col,val in zip(style_feature_cols,style_ba):
+          rec_b[col]=val
+
+
+        
+        # Add A->B, B->A
+        records.append(rec_a)
+        records.append(rec_b)
+        
+    
+    return pd.DataFrame(records)
+
+style_feature_cols = [
+    "style_bold_count",
+    "style_header_count",
+    "style_list_count",
+    "style_sum_assistant_tokens"
+]
+
+pairwise_feature_df = make_pairwise_feature_df(selected_battles_no_ties, selected_models, style_feature_cols)
+pairwise_feature_df.head(2)
+```
+
+## Problem 8c
+根据上面的图, 现在我们有了一些额外的特征, 我们把这些额外的特征接到X向量的后面, 相当于得到了一些额外的feature
+
+唯一的难点在于特征的拼接, 我们需要先把原来的X列通过`hstack`竖着拼接成二维数组, 然后把额外特征列`to_numpy`成二位数组, 再用`hstack`水平拼接起来
+
+参考以下这个可视化变换:
+```
+# 假设 df['X'] 是这样的：
+# 0    [1, -1, 0, 0]
+# 1    [0, 1, -1, 0]
+# 2    [-1, 0, 1, 0]
+
+X_id = np.vstack(df['X'].values)
+# 结果：
+# array([[ 1, -1,  0,  0],
+#        [ 0,  1, -1,  0],
+#        [-1,  0,  1,  0]])
+```
+
+```
+# style_features = ['style_bold_count', 'style_header_count', ...]
+
+X_style = df[style_features].to_numpy()
+# 结果：
+# array([[ 0.5,  0.2,  0.3,  0.1],
+#        [ 0.1,  0.8,  0.2,  0.4],
+#        [ 0.3,  0.1,  0.5,  0.2]])
+```
+
+```
+X_with_style = np.hstack([X_id, X_style])
+# 结果：
+# array([[ 1, -1,  0,  0,  0.5,  0.2,  0.3,  0.1],
+#        [ 0,  1, -1,  0,  0.1,  0.8,  0.2,  0.4],
+#        [-1,  0,  1,  0,  0.3,  0.1,  0.5,  0.2]])
+#
+# 前4列 = 模型标识特征 (X_id)
+# 后4列 = 风格特征 (X_style)
+```
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                      水平拼接 np.hstack                     │
+├──────────────────────┬────────────────────────────────────┤
+│     X_id (模型标识)   │      X_style (风格特征)            │
+│   (4列: 1/-1/0)      │    (4列: normdiff计算的值)         │
+│                      │                                    │
+│  [ 1, -1,  0,  0  |  0.5,  0.2,  0.3,  0.1]              │
+│  [ 0,  1, -1,  0  |  0.1,  0.8,  0.2,  0.4]              │
+│  [-1,  0,  1,  0  |  0.3,  0.1,  0.5,  0.2]              │
+└──────────────────────┴────────────────────────────────────┘
+          ↓
+    最终特征矩阵 X_with_style
+         shape = (n_samples, 8)
+```
+
+
+```python
+def get_sc_category_results(df, selected_models, filter_mask = None,
+                            category_name="Overall w/ Style Control",
+                            n_bootstrap=10, style_features=style_feature_cols):
+    feature_labels = selected_models + style_features
+    if filter_mask is not None:
+        df = df[filter_mask]
+
+    X_id = np.vstack(df['X'].values)
+    X_style = df[style_features].to_numpy()
+    X_with_style = np.hstack([X_id, X_style])
+
+    results_df, mean_scores, confidence_intervals = get_bootstrapped_score(
+        X_with_style, df["y"].to_numpy(), feature_labels,
+        category_name=category_name, n_bootstrap=n_bootstrap
+    )
+
+    results_df["Rank"] = results_df.apply(lambda r: assign_rank(r, results_df), axis=1)
+    results_df.loc[results_df["Model"].isin(style_features), "Rank"] = -1
+
+    # 按题目要求重新排列顺序
+    cols = ['Model', 'Category', 'Average Score', 'Lower Bound', 'Upper Bound', 'Rank']
+    results_df = results_df[cols]
+
+    return results_df
+
+results_df_style_control = get_sc_category_results(
+    pairwise_feature_df, selected_models,
+    category_name="Overall w/ Style Control", n_bootstrap=10
+)
+
+combined_results_df = pd.concat([results_df, results_df_style_control], ignore_index=True)
+cols = ['Model', 'Category', 'Average Score', 'Lower Bound', 'Upper Bound', 'Rank']
+combined_results_df = combined_results_df[cols]
+
+fig = plot_rank_heatmap(combined_results_df, title="With and Without Style Control")
+fig.show()
+```
+
+<img src="/images/189_hw2/189_hw2_21.png" alt="label_plot" />
+
+
+在加入了一些特征之后, 模型的排名发生了很大变化
+
+
+## Problem 9a
+
+课程组给出了计算TF-IDF的代码, 这段代码能够计算出一个phrase在llama-3.1的回答中的"常用程度"和在其他模型当中的"常用程度", 运行这些代码得到示例结果:
+
+<img src="/images/189_hw2/189_hw2_22.png" alt="label_plot" />
+
+表里面每个词都是在llama-3.1的回答中出现的比较频繁, 而在其他模型的回答中出现的很少的词
+
+
+现在的任务是从原始数据出发, 只考虑英语的对话, 然后把他们拆成两部分, 一部分是winner == model_a的行, 一部分是winner == model_b的行, 调用给出的`tfidf_phrase_diff`函数得到表即可, 这个表的含义就是那些在model_a赢的回答中出现多的词或反之
+
+```python
+# TFIDF comparing winning responses to losing responses
+...
+# 1) Restrict to English Only and prepare assistant-only strings for A/B
+# Use 'convert_asst_conversation_to_string' helper function
+selected_battles_english = selected_battles_no_ties[selected_battles_no_ties['language'] == 'English'].copy()
+
+selected_battles_english['asst_a']=selected_battles_english['conversation_a'].apply(convert_asst_conversation_to_string)
+selected_battles_english['asst_b']=selected_battles_english['conversation_b'].apply(convert_asst_conversation_to_string)
+
+# 2) Build lists of assistant-only winning/losing responses
+winning_responses = selected_battles_english.apply(lambda row:row['asst_a'] if row['winner']=='model_a' else row['asst_b'],axis=1).tolist()
+
+losing_responses = selected_battles_english.apply(lambda row:row['asst_a'] if row['winner']=='model_b' else row['asst_b'],axis=1).tolist()
+
+# 3) Compare phrases
+df_win, df_lose = tfidf_phrase_diff(winning_responses, losing_responses, "winning", "losing")
+# 4) Show results
+print("Top winning response phrases:")
+display(df_win)
+print("Top losing response phrases:")
+display(df_lose)
+```
+
+<img src="/images/189_hw2/189_hw2_23.png" alt="label_plot" />
+
+## Problem 9b
+
+开放性问题, 要我们自己挖一个特征出来, 这里我选的是手动添加一些词, 然后遍历每行的`conversation_a`和`conversation_b`去看是否包含这些词当中的任意词语, 就可以得到两个bool变量, 最后相减得到新特征
+
+```python
+# Design your own stylistic feature(s) that compare model A vs B on each row.
+# Keep it simple (boolean presence, counts, or normalized differences) or get creative.
+
+# Remember might want to normalize difference, if you compute counts
+
+# TODO: Define your feature function
+def YOUR_FUNC(row):
+    #Input: a row with 'conversation_a' and 'conversation_b' (each is a list of {role, content} dicts).
+    #Output: a single numeric feature comparing A vs B (e.g., -1/0/1, count diff, or normalized diff).
+    #Hint: You probably want to inspect only assistant messages.
+    # Example (placeholder): return 0
+    phrases = [
+        "step by step",
+        "follow these steps",
+        "the following steps",
+        "let's break it down",
+        "let us break it down",
+        "for example",
+        "for instance",
+        "in summary",
+        "to summarize"
+    ]
+    a_has=False
+    b_has=False
+
+    for msg in row['conversation_a']:
+        if msg['role'] == 'assistant':
+            text = msg['content'].lower().replace("-", " ")
+            if any([p in text for p in phrases]):
+                a_has=True
+    for msg in row['conversation_b']:
+        if msg['role'] == 'assistant':
+            text = msg['content'].lower().replace("-", " ")
+            if any([p in text for p in phrases]):
+                b_has=True
+
+    return int(a_has)-int(b_has)
+
+# TODO: Apply your function to create a new column
+selected_battles_no_ties.loc[:, "YOUR_FEATURE"] = selected_battles_no_ties.apply(YOUR_FUNC, axis=1)
+
+# Choose which style features to control for in ranking.
+# Start from this list and add yours below.
+style_feature_cols = [
+    "style_bold_count",
+    "style_header_count",
+    "style_list_count",
+    "style_sum_assistant_tokens",
+    "refusal_count",
+    "YOUR_FEATURE",   # <- uncomment after you create it
+]
+
+pairwise_feature_df = make_pairwise_feature_df(selected_battles_no_ties, selected_models, style_feature_cols)
+
+combined_results_df_new = get_sc_category_results(pairwise_feature_df,
+                                 selected_models, 
+                                 category_name="Overall w/ Style Control", 
+                                 n_bootstrap=10, 
+                                 style_features=style_feature_cols)
+
+fig = plot_rank_heatmap(pd.concat([results_df, combined_results_df_new]), title="With and Without Style Control (New Features)", selected_models=selected_models)
+fig.show()
+
+# Create and display the plot
+fig = plot_style_features(combined_results_df_new, selected_models)
+fig.show()
+```
+
+<img src="/images/189_hw2/189_hw2_24.png" alt="label_plot" />
