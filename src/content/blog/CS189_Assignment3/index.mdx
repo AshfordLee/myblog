@@ -799,3 +799,130 @@ class Adam(Optimizer):
 
             p.value-=self.lr*m_hat/(np.sqrt(v_hat)+self.eps)
 ```
+
+运行课程组的代码查看三个优化器的训练曲线
+
+
+<img src="/images/189_hw3/189_hw3_4.png" alt="label_plot" />
+
+## Problem 4
+
+这里要我们自己写一个训练循环, 唯一要注意的就是把所有的参数注册成`BearTensor`类, 其他没有什么难点了
+
+```python
+from sklearn.datasets import fetch_openml
+from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import train_test_split
+import numpy as np
+import matplotlib.pyplot as plt
+
+# DO NOT CHANGE THE PREPROCESSING CODE
+data = fetch_openml("wine-quality-red", as_frame=True)
+X = data.data.to_numpy()
+y = data.target.to_numpy().astype(float)
+
+scaler = StandardScaler()
+X_scaled = scaler.fit_transform(X)
+
+X_train, X_test, y_train, y_test = train_test_split(
+    X_scaled, y, test_size=0.4, random_state=42, shuffle=True
+)
+
+X_tensor = BearTensor("X_train", X_train)               # shape: (N_train, input_dim)
+y_tensor = BearTensor("y_train", y_train.reshape(-1,1)) # shape: (N_train,1)
+
+# Add your training code here!
+np.random.seed(42)
+
+input_dim=X_train.shape[1] # 输入维度
+hidden_dim=32 # 隐藏层维度
+output_dim=1 # 输出维度
+
+W1_init=np.random.randn(input_dim,hidden_dim)*np.sqrt(2.0/input_dim) # 第一个hidden_layer矩阵, input_dim * hidden_dim
+W2_init=np.random.randn(hidden_dim,output_dim)*np.sqrt(2.0/input_dim) # 第二个hidden_layer矩阵, hidden_dim * output_dim
+
+W1=BearTensor("W1",W1_init.copy()) # 把参数矩阵注册成为BearTensor类参数
+W2=BearTensor("W2",W2_init.copy()) # 同上
+
+params=[W1,W2]  # 注意我们自己实现的Adam类接受的params是一个list[BearTensor]
+
+optimizer=Adam(params,lr=0.01) # 创建优化器, 学习率为0.01
+
+num_epochs=100 # 训练轮数
+
+train_losses=[] # 训练损失
+test_losses=[] # 测试损失
+
+for epoch in range(num_epochs):
+
+    optimizer.zero_grad() # 清零梯度
+
+    hidden=(X_tensor@W1).sigmoid() # 前向传播
+    output=hidden@W2 # 同上
+    
+    loss=((output-y_tensor)**2).mean() # 计算损失
+
+    loss.backward()
+    optimizer.step() # 更新参数
+
+    train_loss=loss.value.item() # 记录训练损失
+    train_losses.append(train_loss) # 记录训练损失     
+
+    # 计算测试损失（不需要梯度）
+    X_test_tensor = BearTensor("X_test", X_test)
+    y_test_tensor = BearTensor("y_test", y_test.reshape(-1, 1))
+    
+    # 测试前向传播（使用训练好的权重）
+    hidden_test = (X_test_tensor @ W1).sigmoid()
+    output_test = hidden_test @ W2
+    test_loss = ((output_test - y_test_tensor) ** 2).mean()
+    test_losses.append(test_loss.value.item())
+
+    if (epoch + 1) % 10 == 0:
+        print(f"Epoch {epoch+1}/{num_epochs}, Train Loss: {train_loss:.4f}, Test Loss: {test_loss.value.item():.4f}")
+
+# 打印最终MSE
+final_mse = test_losses[-1]
+print(f"\nFinal Test MSE: {final_mse:.4f}")
+
+# 绘制损失曲线
+plt.figure(figsize=(10, 5))
+plt.plot(train_losses, label='Train Loss')
+plt.plot(test_losses, label='Test Loss')
+plt.xlabel('Epoch')
+plt.ylabel('MSE Loss')
+plt.title('Training and Test Loss')
+plt.legend()
+plt.grid(True)
+plt.show()
+
+# --- Prediction function ---
+def predict(x):
+    """Output the scalar prediction for a single training datapoint x"""
+    x_tensor=BearTensor("x_input",x.reshape(1,-1))
+
+    hidden=(x_tensor@W1).sigmoid()
+    output=hidden@W2
+
+    return output.value.item()
+    # pass
+
+```
+
+```
+Epoch 10/100, Train Loss: 11.8084, Test Loss: 10.9215
+Epoch 20/100, Train Loss: 4.0232, Test Loss: 3.5952
+Epoch 30/100, Train Loss: 0.9623, Test Loss: 0.8673
+Epoch 40/100, Train Loss: 0.4591, Test Loss: 0.5058
+Epoch 50/100, Train Loss: 0.5181, Test Loss: 0.5702
+Epoch 60/100, Train Loss: 0.4653, Test Loss: 0.4989
+Epoch 70/100, Train Loss: 0.4054, Test Loss: 0.4402
+Epoch 80/100, Train Loss: 0.3933, Test Loss: 0.4299
+Epoch 90/100, Train Loss: 0.3896, Test Loss: 0.4261
+Epoch 100/100, Train Loss: 0.3834, Test Loss: 0.4217
+
+Final Test MSE: 0.4217
+```
+
+
+<img src="/images/189_hw3/189_hw3_5.png" alt="label_plot" />
