@@ -6,8 +6,10 @@ tags: ['CS189']
 # heroImage: { src: './thumbnail.jpg', alt: '作业封面图片' }
 # heroImage: {}
 language: '中文'
-draft: true
+draft: false
 ---
+
+import { Aside } from 'astro-pure/user'
 
 # CS189 Assignment 3
 
@@ -78,3 +80,722 @@ $$
 $$
 
 如果对上面的求偏导过程有疑问, 建议去看一看微积分(下)或者数学分析(三)
+
+
+## Problem 1
+
+既然要求微分, 首先要实现`Tensor`之间的运算, 注意到正如上面那个图所示, 我们需要三个类:
+
+-- class BearGrad 来给出一个可调用的函数, 根据上游梯度来计算下游梯度
+-- class BearParent 来记录图的边, 即每个节点的parent节点是什么
+-- class BearTensor 来提供各种基础运算, 例如加减乘除
+
+```python
+@dataclass
+class BearGrad:
+    '''Stores how to compute the downstream gradient from the upstream gradient 
+    - `op_str` is just a string describing the operation; you don't need to use this for this HW, but it may help in debugging if you print out what operations create your computation graph.
+    - `fn` is a function that takes in the upstream loss gradient and outputs the loss gradient that should be passed downstream. This essentially applies the chain rule at the current node in the computation graph.
+    '''
+    fn: callable
+    op_str: str | None = None
+```
+
+这是梯度计算器, `fn`函数用于计算下游梯度, `op_str`用来描述这个操作
+
+例如我们有一个中间变量`c = a + b`
+
+```
+a ────┐
+      ├──→ c = a + b ──→ 上游梯度 (∂L/∂c)
+b ────┘
+```
+
+这个`BearGrad`类需要给出`L`对`a`和`b`的偏导数, 即`∂L/∂a`和`∂L/∂b`, 这种情况下`fn`大概是一个加法的梯度函数:
+
+```python
+def add_grad_fn(upstream_grad):
+    # ∂L/∂a = ∂L/∂c * ∂c/∂a = ∂L/∂c * 1
+    # ∂L/∂b = ∂L/∂c * ∂c/∂b = ∂L/∂c * 1
+    return upstream_grad  # 因为 ∂c/∂a = 1
+```
+
+父节点追踪器:
+```python
+@dataclass
+class BearParent:
+    '''This class represents a parent of a node; a node must track its parents so that it knows who to propagate its gradients to.
+    - `grad` is the `BearGrad` object for this parent; we can apply the `fn` from this to compute the gradient that should be passed downstream.
+    - `parent` is the `BearTensor` object for the parent
+    '''
+    parent: BearTensor
+    grad: BearGrad
+
+    def __hash__(self):
+        return id(self)
+
+    def __eq__(self, other):
+        return self is other
+```
+
+要记录父节点和grad, grad代表了"在已知上游梯度的情况下, 如何算出下游梯度"
+
+顺便解释一下类装饰器`@dataclass`, 用了这个装饰器就会自动生成一些方法, 比如:
+```
+__init__
+__repr__ (字符串表示)
+__eq__ (相等比较)
+```
+等等
+
+
+```python
+class BearTensor:
+    '''`BearTensor`: This represents a node in our computation graph
+    - `value` is the underlying data in the Tensor; this is computed during the forward pass
+    - `parents` keeps track of the parents in the computation graph to whom we pass our gradient to
+    - `adjoint` is the gradient (the transpose of it technically) that we compute in the backward pass
+    '''
+    def __init__(self, name: str, value: np.ndarray, parents: list[BearParent] | None = None):
+        self.name = name
+        self.value = value
+        self.parents = parents if parents is not None else []
+        self.adjoint: float | np.ndarray = 0.0
+```
+
+我们要实现各种运算和相对于那种运算的梯度公式
+```
+- Addition (`__add__`)
+- Subtraction (`__sub__`)
+- Multiplication (`__mul__`)
+- Power (`__pow__`)
+- Matrix multiplication (`__matmul__`)
+- Dot product (`dot`)
+- Sum (`sum`)
+- Mean (`mean`)
+- ReLU (`relu`)
+- Sigmoid (`sigmoid`)
+```
+
+先来看`__add__`的实现, 这个运算要对`self.value`和`other.value`进行加法运算, 新`BearTensor.value`就是`self.value + other.value`
+
+接下来思考这个问题: 返回的新的`BearTensor`的parents应该是什么?
+
+```python
+return BearTensor(name=f"{self.name} + {other.name}", value=new_value, parents=parents)
+```
+
+新的parents应该有两个节点, 分别为`self`和`other`, 但是parent必须为`BearParent`类, 而构造这个类的时候需要两个参数: `BearTensor`和`BearGrad`, 显然`BearTensor`已经有了, `BearGrad`需要我们手动演算一下求导的函数
+
+设有两个 Tensor:
+- $a$: `BearTensor`, 值为 $a$
+- $b$: `BearTensor`, 值为 $b$
+- $c = a + b$: `BearTensor`, 值为 $c = a + b$
+
+我们需要计算 $\frac{\partial L}{\partial a}$ 和 $\frac{\partial L}{\partial b}$，其中 $L$ 是最终损失函数：
+
+$$
+\begin{align*}
+\frac{\partial L}{\partial a} = \frac{\partial L}{\partial c} \cdot \frac{\partial c}{\partial a} \\
+
+\frac{\partial L}{\partial b} = \frac{\partial L}{\partial c} \cdot \frac{\partial c}{\partial b} \\
+
+\frac{\partial c}{\partial a} = \frac{\partial (a + b)}{\partial a} = 1 \\
+
+\frac{\partial c}{\partial b} = \frac{\partial (a + b)}{\partial b} = 1\\
+
+\frac{\partial L}{\partial a} = \frac{\partial L}{\partial c} \cdot 1 = \frac{\partial L}{\partial c}\\
+
+\frac{\partial L}{\partial b} = \frac{\partial L}{\partial c} \cdot 1 = \frac{\partial L}{\partial c}
+\end{align*}
+$$
+
+换言之, 这里的两个下游梯度都等于传过来的上游梯度, 所以两个`fn`函数的返回值保持不变
+
+<Aside type="note" title="理解反向传播">
+在上面这个例子里, 正向传播就是已知`a`和`b`, 求`c = a + b`
+
+反向传播就是已知`L`对`c`的梯度, 求`L`对`a`和`b`的梯度, 即`∂L/∂a`和`∂L/∂b`
+</Aside>
+
+```python
+    def __add__(self, other: BearTensor) -> BearTensor:
+        if self.value.shape != other.value.shape:
+            raise ValueError("Shapes must match")
+        
+        new_value = self.value + other.value
+
+        def grad_fn(upstream_grad):
+            return upstream_grad
+
+        def grad_fn_other(upstream_grad):
+            return upstream_grad
+
+        parents=[
+            BearParent(parent=self, grad=BearGrad(fn=grad_fn,op_str='text("add")')),
+            BearParent(parent=other, grad=BearGrad(fn=grad_fn_other,op_str='text("add")'))
+        ]
+
+        return BearTensor(name=f"{self.name} + {other.name}", value=new_value, parents=parents)
+```
+
+减法也一样
+
+$$
+\begin{align*}
+\frac{\partial L}{\partial a} = \frac{\partial L}{\partial c} \cdot \frac{\partial c}{\partial a} \\
+
+\frac{\partial L}{\partial b} = \frac{\partial L}{\partial c} \cdot \frac{\partial c}{\partial b} \\
+
+\frac{\partial c}{\partial a} = \frac{\partial (a - b)}{\partial a} = 1 \\
+
+\frac{\partial c}{\partial b} = \frac{\partial (a - b)}{\partial b} = -1\\
+
+\frac{\partial L}{\partial a} = \frac{\partial L}{\partial c} \cdot 1 = \frac{\partial L}{\partial c}\\
+
+\frac{\partial L}{\partial b} = \frac{\partial L}{\partial c} \cdot -1 = -\frac{\partial L}{\partial c}
+\end{align*}
+$$
+
+乘法
+$$
+\begin{align*}
+\frac{\partial L}{\partial a} = \frac{\partial L}{\partial c} \cdot \frac{\partial c}{\partial a} \\
+
+\frac{\partial L}{\partial b} = \frac{\partial L}{\partial c} \cdot \frac{\partial c}{\partial b} \\
+
+\frac{\partial c}{\partial a} = \frac{\partial (a \cdot b)}{\partial a} = b \\
+
+\frac{\partial c}{\partial b} = \frac{\partial (a \cdot b)}{\partial b} = a \\
+
+\frac{\partial L}{\partial a} = \frac{\partial L}{\partial c} \cdot b \\
+
+\frac{\partial L}{\partial b} = \frac{\partial L}{\partial c} \cdot a 
+\end{align*}
+$$
+
+```python
+    def __mul__(self, other: BearTensor) -> BearTensor:
+        if self.value.shape != other.value.shape:
+            raise ValueError("Shapes must match")
+        
+        new_value = self.value * other.value
+
+        def grad_fn(upstream_grad):
+            return other.value*upstream_grad
+        
+        def grad_fn_other(upstream_grad):
+            return self.value*upstream_grad
+
+        parents=[
+            BearParent(parent=self, grad=BearGrad(fn=grad_fn,op_str='text("mul")')),
+            BearParent(parent=other, grad=BearGrad(fn=grad_fn_other,op_str='text("mul")'))
+        ]
+
+        return BearTensor(name=f"{self.name} * {other.name}", value=new_value, parents=parents)
+```
+
+幂运算, 此时另外一个输入变成固定的数`power`, 记作n
+
+$$
+\begin{align*}
+\frac{\partial L}{\partial a} = \frac{\partial L}{\partial c} \cdot \frac{\partial c}{\partial a} \\
+
+
+\frac{\partial c}{\partial a} = \frac{\partial (a^n)}{\partial a} = n \cdot a^{n-1} \\
+
+
+\frac{\partial L}{\partial a} = \frac{\partial L}{\partial c} \cdot n \cdot a^{n-1} \\
+
+\end{align*}
+$$
+
+```python
+    def __pow__(self, power: float) -> BearTensor:
+        
+        new_value=self.value**power
+
+        def grad_fn(upstream_grad):
+            return upstream_grad*power*self.value**(power-1)
+
+        parents=[
+            BearParent(parent=self, grad=BearGrad(fn=grad_fn,op_str='text("pow")'))
+        ]
+
+        return BearTensor(name=f"{self.name}**{power}", value=new_value, parents=parents)
+```
+
+矩阵乘法, 注意这里要用向量微积分
+
+$$
+\begin{align*}
+\frac{\partial L}{\partial A} &: (m,n) \\
+\frac{\partial L}{\partial C} &: (m,p) \\
+C &= A \cdot B : (m,p) \\
+A &: (m,n), \quad B : (n,p) \\[8pt]
+
+\frac{\partial L}{\partial A} &= \frac{\partial L}{\partial C} \cdot B^T \\
+(m,n) &= (m,p) \cdot (p,n) \\[8pt]
+
+\frac{\partial L}{\partial B} &= A^T \cdot \frac{\partial L}{\partial C} \\
+(n,p) &= (n,m) \cdot (m,p)
+\end{align*}
+$$
+
+```python
+    def __matmul__(self, other: BearTensor) -> BearTensor:
+        # This may be helpful to avoid shape mismatch errors
+        def ensure_2d(x):
+            '''If x is a scalar or 1-D, convert to 2-D'''
+            x = np.asarray(x)
+            if x.ndim == 0:          # scalar
+                return x.reshape(1, 1)
+            elif x.ndim == 1:        # vector
+                return x.reshape(-1, 1)  # column vector convention
+            else:                     # already 2D
+                return x
+        
+        new_value=np.matmul(ensure_2d(self.value), ensure_2d(other.value))
+
+        def grad_fn(upstream_grad):
+
+            return np.matmul(upstream_grad,other.value.T)
+
+        def grad_fn_other(upstream_grad):
+
+            return np.matmul(self.value.T,upstream_grad)
+
+        parents=[
+            BearParent(parent=self, grad=BearGrad(fn=grad_fn,op_str='text("matmul")')),
+            BearParent(parent=other, grad=BearGrad(fn=grad_fn_other,op_str='text("matmul")'))
+        ]
+
+        return BearTensor(name=f"{self.name} @ {other.name}", value=new_value, parents=parents)
+```
+
+记住向量求导的尺寸约定: 偏导数(矩阵)的尺寸保持为"分母"的尺寸, 比如$$\frac{\partial L}{\partial A}$$的尺寸为$$(m,n)$$, 因为$$A$$的尺寸为$$(m,n)$$
+
+点积运算
+
+$$
+\begin{align*}
+c &= \mathbf{a} \cdot \mathbf{b} = \sum_{i=1}^n a_i b_i, \quad 
+\mathbf{a}_{(n)}, \mathbf{b}_{(n)} \\[8pt]
+
+\frac{\partial c}{\partial \mathbf{a}} &= \mathbf{b} \\[6pt]
+
+\frac{\partial L}{\partial \mathbf{a}}_{(n)} &= \frac{\partial L}{\partial c}_{(1)} \cdot \mathbf{b}_{(n)} \\[12pt]
+
+\frac{\partial c}{\partial \mathbf{b}} &= \mathbf{a} \\[6pt]
+
+\frac{\partial L}{\partial \mathbf{b}}_{(n)} &= \frac{\partial L}{\partial c}_{(1)} \cdot \mathbf{a}_{(n)}
+\end{align*}
+$$
+
+```python
+    def dot(self, other: BearTensor) -> BearTensor:
+        if self.value.ndim != 1 or other.value.ndim != 1:
+            raise ValueError("dot() only supports 1-D BearTensors (like torch.dot).")
+
+        new_value=np.dot(self.value,other.value)
+
+        new_value=np.array([new_value])
+            
+        def grad_fn(upstream_grad):
+
+            return upstream_grad*other.value
+
+        def grad_fn_other(upstream_grad):
+
+            return upstream_grad*self.value
+
+        parents=[
+            BearParent(parent=self, grad=BearGrad(fn=grad_fn,op_str='text("dot")')),
+            BearParent(parent=other, grad=BearGrad(fn=grad_fn_other,op_str='text("dot")'))
+        ]
+
+        return BearTensor(name=f"{self.name} @ {other.name}", value=new_value, parents=parents)
+```
+
+自求和
+$$
+\begin{align*}
+s &= \sum_{i=1}^n x_i = \text{sum}(\mathbf{x}), \quad \mathbf{x}_{(n)} \implies s_{(1)} \\[8pt]
+
+\frac{\partial s}{\partial \mathbf{x}} &= \begin{bmatrix} 1 & 1 & \cdots & 1 \end{bmatrix}_{(n)} \\[6pt]
+
+\frac{\partial L}{\partial \mathbf{x}}_{(n)} &= \frac{\partial L}{\partial s}_{(1)} \cdot \mathbf{1}_{(n)}
+\end{align*}
+$$
+
+```python
+    def sum(self) -> BearTensor:
+        
+        new_value=np.array([np.sum(self.value)])
+
+        def grad_fn(upstream_grad):
+            return np.ones_like(self.value)*upstream_grad
+
+        parents=[
+            BearParent(parent=self, grad=BearGrad(fn=grad_fn,op_str='text("sum")'))
+        ]
+
+        return BearTensor(name=f"sum({self.name})", value=new_value, parents=parents)
+```
+
+自平均运算
+
+$$
+\begin{align*}
+\mu &= \text{mean}(\mathbf{x}) = \frac{1}{n} \sum_{i=1}^n x_i, \quad \mathbf{x}_{(n)} \implies \mu_{(1)} \\[8pt]
+
+\frac{\partial \mu}{\partial \mathbf{x}} &= \frac{1}{n} \begin{bmatrix} 1 & 1 & \cdots & 1 \end{bmatrix}_{(n)} \\[6pt]
+
+\frac{\partial L}{\partial \mathbf{x}}_{(n)} &= \frac{\partial L}{\partial \mu}_{(1)} \cdot \frac{1}{n} \cdot \mathbf{1}_{(n)}
+\end{align*}
+$$
+
+```python
+    def mean(self) -> BearTensor:
+        
+        new_value=np.array([np.mean(self.value)])
+
+        def grad_fn(upstream_grad):
+            return np.ones_like(self.value)*upstream_grad/self.value.size
+
+        parents=[
+            BearParent(parent=self, grad=BearGrad(fn=grad_fn,op_str='text("mean")'))
+        ]
+
+        return BearTensor(name=f"mean({self.name})", value=new_value, parents=parents)
+```
+
+
+ReLU运算
+
+$$
+\begin{align*}
+y &= \text{ReLU}(x) = \max(0, x) \\[8pt]
+
+\frac{\partial y}{\partial x} &= \begin{cases} 1 & \text{if } x > 0 \\ 0 & \text{if } x \leq 0 \end{cases} = \mathbb{1}(x > 0) \\[8pt]
+
+\frac{\partial L}{\partial x} &= \frac{\partial L}{\partial y} \cdot \frac{\partial y}{\partial x}
+      = \frac{\partial L}{\partial y} \cdot \mathbb{1}(x > 0)
+\end{align*}
+$$
+
+```python
+    def relu(self) -> BearTensor:
+        
+        new_value=np.maximum(0, self.value)
+
+        def grad_fn(upstream_grad):
+            return (self.value>0)*upstream_grad
+
+        parents=[
+            BearParent(parent=self, grad=BearGrad(fn=grad_fn,op_str='text("relu")'))
+        ]
+
+        return BearTensor(name=f"relu({self.name})", value=new_value, parents=parents)
+```
+
+注意这个求导在数学上是有瑕疵的, ReLU函数在0处并不可导
+
+Sigmoid函数
+
+$$
+\begin{align*}
+y &= \sigma(x) = \frac{1}{1 + e^{-x}} \\[8pt]
+
+\frac{dy}{dx} &= \sigma(x)(1 - \sigma(x)) = y(1 - y) \\[8pt]
+
+\frac{\partial L}{\partial x} &= \frac{\partial L}{\partial y} \cdot \frac{dy}{dx}
+      = \frac{\partial L}{\partial y} \cdot y(1 - y)
+\end{align*}
+$$
+
+```python
+    def sigmoid(self) -> BearTensor:
+        
+        new_value=1 / (1 + np.exp(-self.value))
+
+        def grad_fn(upstream_grad):
+            return upstream_grad*new_value*(1-new_value)
+
+        parents=[
+            BearParent(parent=self, grad=BearGrad(fn=grad_fn,op_str='text("sigmoid")'))
+        ]
+
+        return BearTensor(name=f"sigmoid({self.name})", value=new_value, parents=parents)
+```
+
+课程组给了一个链式图的demo绘图代码, 图如下
+<img src="/images/189_hw3/189_hw3_2.png" alt="label_plot" />
+
+当然, 我们可以修改里面的代码, 比如说绘制一个更复杂的多元函数的链式图
+
+```python
+# # Example code
+# a = BearTensor("a", np.array([2, 3]))
+# b = BearTensor("b", np.array([1, 1]))
+# c = a + b
+# draw_graph(c, "demo_graph.typ")
+
+a = BearTensor("a", np.array([2, 3]))
+b = BearTensor("b", np.array([1, 1]))
+c = BearTensor("c", np.array([1, 4]))
+d = a * b + b * c + a * c
+draw_graph(d, "demo_graph.typ")
+```
+
+<img src="/images/189_hw3/189_hw3_3.png" alt="label_plot" />
+
+
+## Problem 2
+
+要实现反向传播, 首先要对所有的节点进行拓扑排序, 这样才能搞清楚传播路径
+
+```python
+def topological_sort(node):
+    '''Return a list of nodes ordered topologically'''
+
+    visited = set()
+    sorted_nodes= []
+    
+    def dfs(current_node):
+        if current_node in visited:
+            return
+
+        visited.add(current_node)
+
+        for parent_info in current_node.parents:
+            dfs(parent_info.parent)
+
+        sorted_nodes.append(current_node)
+
+    dfs(node)
+    return sorted_nodes
+```
+
+搞清楚这个结点添加的顺序, 举一个简单的例子:
+```
+dfs(loss):
+  loss 不在 visited → 添加
+  遍历 loss.parents → [ReLU]
+    dfs(ReLU):
+      ReLU 不在 visited → 添加
+      遍历 ReLU.parents → [x2]
+        dfs(x2):
+          x2 不在 visited → 添加
+          遍历 x2.parents → [x1]
+            dfs(x1):
+              +1 不在 visited → 添加
+              遍历 +1.parents → [x]
+                dfs(x):
+                  x 不在 visited → 添加
+                  遍历 x.parents → []
+                  sorted_nodes.append(x)   ✓
+              sorted_nodes.append(x1)      ✓
+            sorted_nodes.append(x2)         ✓
+          sorted_nodes.append(ReLU)        ✓
+      sorted_nodes.append(loss)             ✓
+
+最终: [x, x1, x2, ReLU, loss]
+```
+这里x是最初的输入, 没有任何依赖, 我们最终需要的梯度就是loss对x的梯度, 为了得到这个梯度, 需要计算一系列loss对中间变量(x1, x2, ReLU)的梯度, 然后通过链式法则得到loss对x的梯度
+
+
+还需要从某个节点开始, 重置他和他上游(父)节点的所有梯度, 这也需要用递归实现
+
+```python
+def reset_children(self):
+    """Resets the gradient in the current node to zero and all nodes before it in the computation graph."""
+    
+    def reset_gradient(node):
+        if node.adjoint is not None:
+            node.adjoint = 0
+
+        for parent in node.parents:
+            reset_gradient(parent.parent)
+
+    reset_gradient(self)
+```
+
+现在实现反向传播, 思考一下, 以上面那个例子当中的[x, x1, x2, ReLU, loss], 遍历的顺序应该是从loss开始, 而不是从x开始
+
+遍历到每个节点x, 都需要再遍历x的父节点, 并且更新父节点的梯度
+
+```python
+def backward(self):
+    """
+    Take a node in the computation graph, reset all gradients, and perform backpropagation 
+    to compute the adjoints (gradients) for all nodes in the graph.
+
+    Hint: After resetting the gradients, what should the gradient at the current node be?
+    """
+    self.reset_children()
+
+    sorted_nodes=topological_sort(self)
+
+    sorted_nodes.reverse()
+
+    self.adjoint=1.0
+
+    for node in sorted_nodes:
+        
+        for parent_info in node.parents:
+            parent=parent_info.parent
+            grad_fn=parent_info.grad.fn
+
+            parent_grad=grad_fn(node.adjoint)
+
+            parent.adjoint+=parent_grad
+```
+
+## Problem 3
+
+实现SGD, Momentum, 实现AdamW优化器
+
+首先考虑优化器的基类, 需要有一个学习率和一堆的参数, 参数是保存为`list[BearTensor]`, `value`属性保存参数值, `adjoint`属性保存梯度
+
+```python
+class Optimizer:
+    def __init__(self, params: list[BearTensor], lr: float):
+        self.params = params
+        self.lr = lr
+
+    def zero_grad(self):
+        for p in self.params:
+            p.adjoint = np.zeros_like(p.value)
+
+    def step(self):
+        # raise NotImplementedError
+        for p in self.params:
+            p.value -= self.lr * p.adjoint
+```
+
+SGD直接照抄基类就行
+
+```python
+class SGD(Optimizer):
+    def __init__(self, params: list[BearTensor], lr: float):
+        super().__init__(params, lr)
+
+    def step(self):
+        
+        for p in self.params:
+            p.value -= self.lr * p.adjoint
+        # pass
+```
+
+注意Momentum优化器的公式:
+
+$$
+\boxed{
+\begin{align*}
+m_t &= \beta \cdot m_{t-1} + g_t \quad \text{(动量项)} \\[6pt]
+v_t &= -\eta \cdot m_t \quad \text{(速度/增量)} \\[6pt]
+w_{t+1} &= w_t + v_t = w_t - \eta \cdot m_t \quad \text{(参数更新)}
+\end{align*}
+}
+$$
+
+先把这些notation映射到我们类里的属性:
+
+$$
+\begin{array}{c|c|c}
+\text{符号} & \text{代码对应} & \text{含义} \\ \hline
+g_t & \texttt{p.adjoint} & 当前梯度 \\
+m_t & \texttt{momentum\_term} & 动量项 \\
+v_t & \texttt{self.velocities[i]} & 速度/参数增量 \\
+\beta & \texttt{self.beta} & 动量系数 \\
+\eta & \texttt{self.lr} & 学习率 \\
+w_t & \texttt{p.value} & 参数值
+\end{array}
+$$
+
+接下来没有任何难度了, 在step方法里遍历参数然后逐个更新就行
+
+```python
+class Momentum(Optimizer):
+    def __init__(self, params: list[BearTensor], lr: float, beta: float = 0.9):
+        super().__init__(params, lr)
+        self.beta = beta
+        self.velocities = [np.zeros_like(p.value) for p in self.params]
+
+    def step(self):
+        for i, p in enumerate(self.params):
+            if self.lr != 0:
+                prev_momentum = self.velocities[i] / (-self.lr)
+            else:
+                prev_momentum = 0
+            
+
+            momentum_term = prev_momentum * self.beta + p.adjoint
+            
+
+            self.velocities[i] = -self.lr * momentum_term
+            
+
+            p.value += self.velocities[i]
+```
+
+对Adam优化器也做同样的理解
+
+$$
+\boxed{
+\begin{align*}
+\text{1. 一阶矩:} \quad & m_t = \beta_1 \cdot m_{t-1} + (1 - \beta_1) \cdot g_t \\[6pt]
+\text{2. 二阶矩:} \quad & v_t = \beta_2 \cdot v_{t-1} + (1 - \beta_2) \cdot g_t^2 \\[6pt]
+\text{3. 偏差校正:} \quad & \hat{m}_t = \frac{m_t}{1 - \beta_1^t}, \quad \hat{v}_t = \frac{v_t}{1 - \beta_2^t} \\[6pt]
+\text{4. 参数更新:} \quad & w_{t+1} = w_t - \eta \cdot \frac{\hat{m}_t}{\sqrt{\hat{v}_t} + \varepsilon}
+\end{align*}
+}
+$$
+
+$$
+\begin{array}{c|c|c}
+\text{符号} & \text{代码对应} & \text{含义} \\ \hline
+g_t & \texttt{p.adjoint} & 当前梯度 \\
+m_t & \texttt{self.ms[i]} & 一阶矩估计（动量） \\
+v_t & \texttt{self.vs[i]} & 二阶矩估计（方差） \\
+\hat{m}_t & \texttt{m\_hat} & 校正后一阶矩 \\
+\hat{v}_t & \texttt{v\_hat} & 校正后二阶矩 \\
+\beta_1 & \texttt{self.beta1} & 一阶矩衰减系数 (0.9) \\
+\beta_2 & \texttt{self.beta2} & 二阶矩衰减系数 (0.999) \\
+\varepsilon & \texttt{self.eps} & 防止除零 (1e-8) \\
+t & \texttt{self.t} & 时间步 \\
+\eta & \texttt{self.lr} & 学习率
+\end{array}
+$$
+
+```python
+class Adam(Optimizer):
+    def __init__(
+        self,
+        params: list[BearTensor],
+        lr: float,
+        beta1: float = 0.9,
+        beta2: float = 0.999,
+        eps: float = 1e-8,
+    ):
+        super().__init__(params, lr)
+        self.beta1 = beta1
+        self.beta2 = beta2
+        self.eps = eps
+        self.t = 0
+        self.ms = [np.zeros_like(p.value) for p in self.params]
+        self.vs = [np.zeros_like(p.value) for p in self.params]
+
+    def step(self):
+        self.t+=1
+        for i,p in enumerate(self.params):
+            self.ms[i]=self.beta1*self.ms[i]+(1-self.beta1)*p.adjoint
+
+            self.vs[i]=self.beta2*self.vs[i]+(1-self.beta2)*((p.adjoint)**2)
+
+            m_hat=self.ms[i]/(1-self.beta1**self.t)
+            v_hat=self.vs[i]/(1-self.beta2**self.t)
+
+            p.value-=self.lr*m_hat/(np.sqrt(v_hat)+self.eps)
+```
