@@ -6,7 +6,7 @@ tags: ['CS189']
 # heroImage: { src: './thumbnail.jpg', alt: '作业封面图片' }
 # heroImage: {}
 language: '中文'
-draft: true
+draft: false
 ---
 
 import { Aside } from 'astro-pure/user'
@@ -779,3 +779,1000 @@ plot_metrics(cnn_train_losses, cnn_val_losses, cnn_train_accuracies, cnn_val_acc
 
 
 <img src="/images/189_hw4/hw4_1.png" alt="label_plot" />
+
+
+## 残差块
+
+如果我们的某一层神经网络需要学习的函数是`f(x)`, 我们可以让他学习`g(x) = f(x) - x`, 然后在输出端再加上`x`即可(即输出`f(x) = g(x) + x`)
+
+这有个显然的好处, 对于第一层的梯度:
+
+$$
+\frac{\partial L}{\partial x_1} = \frac{\partial L}{\partial y} \cdot \frac{\partial y}{\partial x_1}
+       = \frac{\partial L}{\partial y} \cdot \left( \frac{\partial F_n}{\partial x_1} + 1 \right)
+       = \frac{\partial L}{\partial y} \cdot \frac{\partial F_n}{\partial x_n} \cdot \frac{\partial F_{n-1}}{\partial x_{n-1}} \cdot \cdots \cdot \frac{\partial F_2}{\partial x_2} \cdot \left( \frac{\partial F_1}{\partial x_1} + 1 \right)
+$$
+
+最后一项的`+1`有效防止了梯度消失, 因为梯度为-1是不稳定的, 并不会一直出现, 所以可以保证梯度不会指数级别的衰减到0, 不过也许还是会震荡
+
+## Problem 2a
+
+根据给出的架构自己实现`ResNet`
+
+```
+                    输入 x (in_channels)
+                        │
+          ┌─────────────┴─────────────┐
+          │                           │
+          ▼                           │
+    ┌─────────┐                       │
+    │ Conv1   │ ──→ BatchNorm1 ──→ ReLU
+    └────┬────┘                       │
+         │                            │
+    ┌────┴────┐                       │
+    │ Conv2   │ ──→ BatchNorm2        │
+    └────┬────┘                       │
+         │                            │
+    ┌────┴────────────────────────────┐
+    │              +                  │  ← 残差相加
+    └────┬────────────────────────────┘
+         │
+      ReLU (out)
+```
+
+卷积层在CNN的实现当中已经解释过了, 说一说归一化层`nn.BatchNorm2d`, 实际上对于输入维度[B, C, H, W], 他会对每个batch的每个channel(的所有数据点)去计算均值和方差做归一化
+
+```
+# 输入: conv_output shape = [B=4, C=3, H=2, W=2]
+# B=batch size, C=channels, H=height, W=width
+
+x = torch.tensor([
+    # batch 0
+    [[[1, 2],      # channel 0
+      [3, 4]],
+     [[5, 6],      # channel 1  
+      [7, 8]],
+     [[9, 10],     # channel 2
+      [11, 12]]],
+    # batch 1
+    [[[2, 3],
+      [4, 5]],
+     [[6, 7],
+      [8, 9]],
+     [[10, 11],
+      [12, 13]]],
+    # batch 2...
+    # batch 3...
+])
+```
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  BatchNorm2d 对每个通道独立计算：                            │
+├─────────────────────────────────────────────────────────────┤
+│                                                             │
+│  Channel 0 (所有batch):                                     │
+│  ┌─────────┬─────────┬─────────┬─────────┐                 │
+│  │ batch0  │ batch1  │ batch2  │ batch3  │                 │
+│  │ [[1,2], │ [[2,3], │ ...     │ ...     │                 │
+│  │  [3,4]] │  [4,5]] │         │         │                 │
+│  └─────────┴─────────┴─────────┴─────────┘                 │
+│        │           │                               × 4    │
+│        └───────────┴───────────────────────→               │
+│                 展平成: [1,2,3,4, 2,3,4,5, ...]            │
+│                                                             │
+│  μ₀ = mean([1,2,3,4,2,3,4,5, ...])                         │
+│  σ₀² = var([1,2,3,4,2,3,4,5, ...])                         │
+│                                                             │
+├─────────────────────────────────────────────────────────────┤
+│                                                             │
+│  Channel 1:                                                 │
+│  ┌─────────┬─────────┬─────────┬─────────┐                 │
+│  │ [[5,6], │ [[6,7], │ ...     │ ...     │                 │
+│  │  [7,8]] │  [8,9]] │         │         │                 │
+│  └─────────┴─────────┴─────────┴─────────┘                 │
+│        │           │                               × 4    │
+│        └───────────┴───────────────────────→               │
+│                 展平成: [5,6,7,8,6,7,8,9, ...]             │
+│                                                             │
+│  μ₁ = mean([5,6,7,8,6,7,8,9, ...])                         │
+│  σ₁² = var([5,6,7,8,6,7,8,9, ...])                         │
+│                                                             │
+├─────────────────────────────────────────────────────────────┤
+│                                                             │
+│  Channel 2:  同理计算 μ₂, σ₂²                               │
+│                                                             │
+└─────────────────────────────────────────────────────────────┘
+
+结果：3个通道 → 3个均值(μ₀, μ₁, μ₂) + 3个方差(σ₀², σ₁², σ₂²)
+```
+
+再说一下这里的残差连接, 当x经过主路径几个卷积层的变换后, 此时肯定是不能和原始输入x相加了, 所以需要一个`1x1`的卷积层来把x的通道数变成和主路径的输出通道数一样, 然后再相加
+
+```python
+class ResidualBlock(nn.Module):
+    def __init__(
+        self,
+        in_channels=3,
+        out_channels=64,
+        kernel_size=3,
+        initial_downsample=False, # whether to downsample the input
+        verbose=False, # whether to print debug statements
+    ):
+        super().__init__()
+        self.verbose = verbose
+
+
+        # TODO: Define the first conv layer
+        self.conv1 = nn.Conv2d(in_channels=in_channels, out_channels=out_channels,
+        kernel_size=kernel_size,padding=1,stride=1 if not initial_downsample else 2)
+        # TODO: Define the first batchnorm layer
+        self.batchnorm1 = nn.BatchNorm2d(num_features=out_channels)
+        # TODO: Define the second conv layer
+        self.conv2 = nn.Conv2d(in_channels=out_channels,out_channels=out_channels,kernel_size=kernel_size,
+        padding=1,stride=1)
+        # TODO: Define the second batchnorm layer
+        self.batchnorm2 = nn.BatchNorm2d(num_features=out_channels)
+        # TODO: Define the residual connection
+        self.residual_connection = nn.Conv2d(in_channels=in_channels,out_channels=out_channels,kernel_size=1,
+        stride=1 if not initial_downsample else 2)
+
+    def forward(self, x):
+        # TODO: Implement the forward pass
+        conv1 = self.conv1
+        if self.verbose:
+            print(f"conv1 shape: {conv1.shape}")
+        bn1 = self.batchnorm1
+        if self.verbose:
+            print(f"bn1 shape: {bn1.shape}")
+
+        relu=nn.ReLU()
+        z1 = relu(bn1(conv1(x)))
+
+        conv2 = self.conv2
+        if self.verbose:
+            print(f"conv2 shape: {conv2.shape}")
+        bn2 = self.batchnorm2
+        if self.verbose:
+            print(f"bn2 shape: {bn2.shape}")
+
+        residual = self.residual_connection
+        if self.verbose:
+            print(f"residual shape: {residual.shape}")
+
+        out = bn2(conv2(z1))+residual(x)
+        # Don't forget to apply ReLU activation after adding the residual
+        out = relu(out)
+        return out
+```
+
+运行维度检查的代码:
+
+```python
+x = torch.rand((1, 3, 224, 224))  # 1 image, 3 RGB channels, 224 x 224 pixels
+print(f"Shape of input: {x.shape}")
+
+res = ResidualBlock(in_channels=3, out_channels=64, kernel_size=3, initial_downsample=True, verbose=False)
+resblock_out = res(x)
+print(f"Shape of output: {resblock_out.shape}")
+assert resblock_out.shape == torch.Size([1, 64, 112, 112]), f"Expected output shape (1, 64, 112, 112), but got {resblock_out.shape}"
+```
+
+```
+Shape of input: torch.Size([1, 3, 224, 224])
+Shape of output: torch.Size([1, 64, 112, 112])
+```
+
+```python
+# Verify the shapes of the weights
+conv1_shape = res.conv1.weight.shape
+print(f"Shape of conv1 weight: {conv1_shape}")
+assert conv1_shape == torch.Size([64, 3, 3, 3]), f"Expected Conv1 weights to have shape (64, 3, 3, 3), but got {conv1_shape}"
+
+conv2_shape = res.conv2.weight.shape
+print(f"Shape of conv2 weight: {conv2_shape}")
+assert conv2_shape == torch.Size([64, 64, 3, 3]), f"Expected Conv2 weights to have shape (64, 64, 3, 3), but got {conv2_shape}"
+
+residual_shape = res.residual_connection.weight.shape
+print(f"Shape of residual weight: {residual_shape}")
+assert residual_shape == torch.Size([64, 3, 1, 1]), f"Expected residual connection to have shape (64, 3, 1, 1), but got {residual_shape}"
+```
+
+```
+Shape of conv1 weight: torch.Size([64, 3, 3, 3])
+Shape of conv2 weight: torch.Size([64, 64, 3, 3])
+Shape of residual weight: torch.Size([64, 3, 1, 1])
+```
+
+## Problem 2b
+
+刚刚我们已经实现了残差块, 得益于`PyTorch`的继承和封装机制, 我们可以很方便的再实现`ResNet-18`
+
+```python
+class ResNet18(nn.Module):
+    def __init__(self, num_classes, verbose=False):
+
+        # TODO: Instantiate all the layers/stages of ResNet-18
+        # Hint: don't forget to call super().__init__() first!
+        super().__init__()
+        self.conv1=nn.Conv2d(in_channels=3,out_channels=64,kernel_size=7,stride=2,padding=3)
+        self.batchnorm1=nn.BatchNorm2d(num_features=64)
+        self.relu=nn.ReLU()
+        self.maxpool1=nn.MaxPool2d(kernel_size=3,stride=2,padding=1)
+
+        self.residualblock1=ResidualBlock(in_channels=64,out_channels=64,kernel_size=3)
+
+        self.residualblock2=ResidualBlock(in_channels=64,out_channels=64,kernel_size=3)
+
+        self.residualblock3=ResidualBlock(in_channels=64,out_channels=128,kernel_size=3,initial_downsample=True)
+
+        self.residualblock4=ResidualBlock(in_channels=128,out_channels=128,kernel_size=3)
+
+        self.residualblock5=ResidualBlock(in_channels=128,out_channels=256,kernel_size=3,initial_downsample=True)
+
+        self.residualblock6=ResidualBlock(in_channels=256,out_channels=256,kernel_size=3)
+
+        self.residualblock7=ResidualBlock(in_channels=256,out_channels=512,kernel_size=3,initial_downsample=True)
+
+        self.residualblock8=ResidualBlock(in_channels=512,out_channels=512,kernel_size=3)
+
+        self.avgpool=nn.AdaptiveAvgPool2d(output_size=(1,1))
+
+        self.flatten=nn.Flatten()
+
+        self.fc=nn.Linear(in_features=512,out_features=num_classes)
+        
+        self.model=nn.Sequential(self.conv1,self.batchnorm1,self.relu,self.maxpool1,self.residualblock1,self.residualblock2,
+        self.residualblock3,self.residualblock4,self.residualblock5,self.residualblock6,
+        self.residualblock7,self.residualblock8,self.avgpool,self.flatten,self.fc)
+        
+    def forward(self, x):
+
+        # TODO: Implement the forward pass of ResNet-18
+        out=self.model(x)
+
+        return out
+```
+
+看起来很吓人, 不过是搭积木罢了
+
+```python
+x = torch.rand((1, 3, 224, 224))  # 1 image, 3 RGB channels, 224 x 224 pixels
+print(f"Shape of input: {x.shape}")
+
+resnet18 = ResNet18(num_classes=10, verbose=True)
+resnet18_out = resnet18(x)
+print(f"Shape of output: {resnet18_out.shape}")
+assert resnet18_out.shape == torch.Size([1, 10]), f"Expected output shape (1, 10), but got {resnet18_out.shape}"
+
+```
+
+```
+Shape of input: torch.Size([1, 3, 224, 224])
+Shape of output: torch.Size([1, 10])
+```
+
+## Problem 2c
+
+直接调用之前的`train`函数开始训练即可
+
+```python
+# TODO: Instantiate a ResNet18 model
+resnet = ResNet18(num_classes=10)
+
+# TODO: Set the number of epochs
+num_epochs = 50
+
+# TODO: Instantiate an optimizer
+optimizer = AdamW(resnet.parameters(),lr=0.001)
+
+# TODO: Instantiate a loss criterion
+criterion = nn.CrossEntropyLoss()
+
+# TODO: Train the model
+
+resnet_train_accuracies, resnet_train_losses, resnet_val_accuracies, resnet_val_losses = train(
+    model=resnet,
+    optimizer=optimizer,
+    criterion=criterion,
+    num_epochs=num_epochs,
+    train_dataloader=train_dataloader,
+    val_dataloader=val_dataloader
+)
+```
+
+## Problem 2d
+
+同样的, 调用`plot_metrics`函数画出损失曲线
+
+```python
+plot_metrics(resnet_train_losses, resnet_val_losses, resnet_train_accuracies, resnet_val_accuracies, num_epochs=50, title="ResNet Training Metrics")
+```
+
+<img src="/images/189_hw4/hw4_2.png" alt="label_plot" />
+
+
+## Transformer
+
+
+<img src="/images/189_hw4/hw4_3.png" alt="label_plot" />
+
+这里要求我们实现Transformer模型, 虽然说这个完整的架构比CS336里面那个要实现的东西多一点, 但实际上简单很多, 因为这里全程都用`PyTorch`实现, 而那边基本上都是手搓
+
+和之前做`ResNet`一样, 先从子块开始实现, 然后再搭积木拼装回去
+
+这一部分的更详细实现和原理参看我CS336的Assignment1 Part2的文章
+
+
+## Problem 3a
+
+要求实现`softmax`, 直接用`torch.exp`和`torch.sum`即可
+
+```python
+def softmax(x: torch.Tensor):
+    """
+    Compute the softmax of each element in x.
+    """
+    x_exp=torch.exp(x)
+    x_sum=torch.sum(x_exp,dim=-1,keepdim=True)
+    return x_exp/x_sum
+```
+
+## Problem 3b
+
+要求实现点积注意力机制, 本质上就是几个矩阵(Tensor)相乘而已
+
+```python
+import math
+def scaled_dot_product_attention(Q: torch.Tensor, K: torch.Tensor, V: torch.Tensor, mask=None, verbose=False):
+    """
+    Q: matrix of shape (B, N, d_k)
+    K: matrix of shape (B, N, d_k)
+    V: matrix of shape (B, N, d_v)
+    mask: boolean matrix of shape (B, N, N). Values where mask is True will be masked out
+
+    B is the batch size
+    N is the number of query/key/value vectors
+    d_k is the dimensions of the query/key vectors
+    d_v is the dimensions of the value vectors
+    """
+    assert Q.shape[-1] == K.shape[-1], "Q and K must have same d_k dimension"
+    assert K.shape[-2] == V.shape[-2], "K and V must have same sequence length"
+
+
+    # TODO: Implement the attention function
+    return torch.matmul((softmax(torch.matmul(Q,K.transpose(-2,-1))/math.sqrt(Q.shape[-1]))),V)
+```
+
+## Problem 3c
+要求实现注意力头, 注意这里的输入有两种, 一种是输入x, 然后通过三个变换矩阵分别变换到$$Q,K,V$$, 另一种是在Outputs模块当中, 左边的两个输入要读取Inputs模块的输出, 右边的一个输入为x, 通过一个verbose参数去控制一下就好了
+
+```python
+class AttentionHead(nn.Module):
+    def __init__(self, d_model=512, d_k=64, verbose=False):
+
+        # TODO: Implement the __init__ method
+        # Don't forget to call super().__init__()!
+        super().__init__()
+        self.W_q=nn.Linear(d_model,d_k)
+        self.W_k=nn.Linear(d_model,d_k)
+        self.W_v=nn.Linear(d_model,d_k)
+        self.verbose=verbose
+
+
+    def forward(self, x, encoder_output=None, mask=None):
+        """
+        x is the input to use for the queries, keys, and values
+        encoder_output is the output from the encoder (used for cross-attention)
+        mask is the mask to use for the attention
+        """
+
+
+        # TODO: Implement the forward method
+        Q = self.W_q(x)
+        K = self.W_k(x)
+        V = self.W_v(x)
+
+        if encoder_output is not None:
+            Q = self.W_q(x)
+            K = self.W_k(encoder_output)
+            V = self.W_v(encoder_output)
+
+        out = scaled_dot_product_attention(Q,K,V,mask=mask,verbose=self.verbose)
+
+        return out
+```
+
+所谓的"三个线性变换到QKV空间"其实就是三个线性层
+
+## Problem 3d
+
+要求实现多头机制, 其实只不过是初始化若干个AttentionHead类, 然后把x传入每个类, 最后把每个类的输出拼接起来, 这里只要注意一下每个头的维度均为`d_k = d_model / num_heads`即可, 还有就是计算完的注意力要乘以一个`W_o`矩阵
+
+```python
+class MultiHeadAttention(nn.Module):
+    def __init__(
+        self,
+        num_heads=8,
+        d_model=512,  # dimension of the embeddings
+        verbose=False,
+    ):
+        """
+        Args:
+            num_heads: number of attention heads
+            d_model: dimension of the embeddings
+            verbose: whether to print debug information
+        """
+
+        # TODO: Implement the __init__ method
+        super().__init__()
+        self.d_k = d_model//num_heads
+        self.heads = nn.ModuleList([AttentionHead(d_model=d_model,d_k=self.d_k,verbose=verbose) for _ in range(num_heads)])
+        self.W_out = nn.Linear(d_model,d_model)
+
+    def forward(self, x, encoder_output=None, mask=None):
+
+        # TODO: Implement the forward method
+        out = torch.cat([head(x,encoder_output,mask)for head in self.heads],dim=-1)
+        out = self.W_out(out)
+
+        return out
+
+```
+
+## Problem 3e
+
+
+实现架构图的左半部分, 非常纯粹的看图说话, 而且用`torch`实现这个`ffn`也非常简单, 不过是一个线性层加上一个ReLU而已
+
+如果想看LayerNorm, Linear, ReLU的实现, 参看我CS336的Assignment1 Part2的文章
+
+```python
+class EncoderLayer(nn.Module):
+    def __init__(self, d_model=512, num_heads=8, verbose=False):
+
+        # TODO: Implement the __init__ method
+        super().__init__()
+        self.multiheadlayer=MultiHeadAttention(num_heads=num_heads,d_model=d_model,verbose=verbose)
+        self.layer_norm1=nn.LayerNorm(d_model)
+        self.ffn=nn.Sequential(
+            nn.Linear(d_model,d_model),
+            nn.ReLU(),
+            
+        )
+
+    def forward(self, x, mask=None):
+
+        # TODO: Implement the forward method
+        # 1. Self-attention
+        out = self.multiheadlayer(x,mask=mask)
+        # 2. Residual connection
+        out = x + out
+        # 3. LayerNorm
+        out = self.layer_norm1(out)
+        norm1_out = out
+        # 4. Feedforward network
+        out=self.ffn(out)
+        # 5. Residual connection
+        out=out+norm1_out
+        # 6. LayerNorm
+        out=self.layer_norm1(out)
+        # 7. Return the output
+        return out
+```
+
+## Problem 3f
+
+实现架构图的右半部分Decoder, 和上面差不多, 不再赘述了, 这里我没有写mask功能, 实际上mask功能就是构造一个上三角为True, 下三角为False的矩阵, 然后让注意力机制在计算注意力的时候, 把下三角的注意力权重设为负无穷, 这样在计算注意力权重的时候, 下三角的注意力权重就会变成0, 从而实现mask功能
+
+具体可以看我CS336的Assignment1 Part2的文章, 那里非常详细的说了这个掩码功能
+
+```python
+class DecoderLayer(nn.Module):
+    def __init__(self, d_model=512, num_heads=8, verbose=False):
+
+        # TODO: Implement the __init__ method
+        super().__init__()
+        self.masked_multiheadlayer1=MultiHeadAttention(num_heads=num_heads,d_model=d_model,verbose=verbose)
+        self.layernorm1=nn.LayerNorm(d_model)
+        self.masked_multiheadlayer2=MultiHeadAttention(num_heads=num_heads,d_model=d_model,verbose=verbose)
+        self.ffn=nn.Sequential(
+            nn.Linear(d_model,4*d_model),
+            nn.ReLU(),
+            nn.Linear(4*d_model,d_model)
+        )
+        self.layernorm2=nn.LayerNorm(d_model)
+
+    def forward(self, x, encoder_output):
+
+        # TODO: Implement the forward method
+        mask = torch.triu(torch.ones(x.shape[1], x.shape[1], dtype=torch.bool, device=x.device), diagonal=1)
+        # Create a look-ahead mask
+
+        # 1. Masked self-attention
+        out = self.masked_multiheadlayer1(x,mask=mask)
+        # 2. Residual connection
+        out = x + out
+        # 3. LayerNorm
+        out = self.layernorm1(out)
+        norm1 = out
+        # 4. Cross-attention
+        out = self.masked_multiheadlayer2(out,encoder_output=encoder_output)
+        # 5. Residual connection
+        out = out + norm1
+        # 6. LayerNorm
+        out = self.layernorm2(out)
+        norm2=out
+        # 7. Position-wise feed forward network
+        out = self.ffn(out)
+        # 8. Residual connection
+        out = out + norm2
+        # 9. LayerNorm
+        out = self.layernorm2(out)
+        # 10. Return the final normalized output
+        return out
+        # 10. Return the final normalized output
+```
+
+## Problem 3g
+
+要求实现RoPE, 这里解释起来比较复杂, 建议看336的notes, 这里我直接给出代码
+
+```python
+class PositionalEncoding(nn.Module):
+    def __init__(self, d_model, max_len=1024):
+        """
+        max_len = max number of tokens in the sequence
+        """
+        super().__init__()
+        self.pos = torch.zeros((max_len, d_model))
+        numerator = torch.arange(end=max_len, dtype=torch.float32).reshape(-1, 1) # shape (seq_len, 1)
+        denominator = torch.pow(10000, torch.arange(start=0, end=d_model, step=2, dtype=torch.float32) / d_model).reshape(1, -1) # shape (1, d_model / 2)
+
+        quotient = numerator / denominator # shape (seq_len, d_model). quotient[i, j] = numerator[i, 0] / denominator[0, j]
+        self.pos[:, 0::2] = torch.sin(quotient) # assign result of trig to all even indices for every token positions
+        self.pos[:, 1::2] = torch.cos(quotient) # assign result of trig to all odd indices for every token position
+
+    def forward(self, x):
+        """
+        Input x is of shape (B, seq_len, d_embedding)
+        """
+        out = x + self.pos[:x.shape[1], :].to(device=x.device)
+        return out
+```
+
+## Problem 3h
+
+拓展一下encode部分, 本质上encode就三件事情: 词嵌入, RoPE, 过含有多头注意力, layernorm, ffn的EncodeLayer
+
+```python
+class TransformerEncoder(nn.Module):
+    def __init__(
+        self, vocab_size=1024, d_model=512, num_layers=6, num_heads=8, verbose=False
+    ):
+
+        # TODO: Implement the __init__ method
+        super().__init__()
+        self.embedding=nn.Embedding(num_embeddings=vocab_size,embedding_dim=d_model)
+        self.positional_encoding=PositionalEncoding(d_model=d_model)
+        self.encoder_layers=nn.ModuleList([EncoderLayer(d_model=d_model,num_heads=num_heads,verbose=verbose) for _ in range(num_layers)])
+        self.num_layers=num_layers
+        self.num_heads=num_heads
+
+    def forward(self, x):
+
+        # 1. Embed the input sequence of tokens
+        x = self.embedding(x)
+        # 2. Add positional encodings
+        x = self.positional_encoding(x)
+        # 3. Sequentially pass the result through each EncoderLayer
+        for layer in self.encoder_layers:
+            x = layer(x)
+        # 4. Return the final tensor
+        return x
+```
+
+## Problem 3i
+
+拓展decode部分, 和上面一样
+
+```python
+class TransformerDecoder(nn.Module):
+    def __init__(self, vocab_size=1024, d_model=512, num_layers=6, num_heads=8, verbose=False):
+
+        # TODO: Implement the __init__ method
+        super().__init__()
+        self.embedding=nn.Embedding(num_embeddings=vocab_size,embedding_dim=d_model)
+        self.positional_encoding=PositionalEncoding(d_model=d_model)
+        self.num_layers=num_layers
+        self.decoder_layers=nn.ModuleList([DecoderLayer(d_model=d_model,num_heads=num_heads,verbose=verbose) for _ in range(num_layers)])
+        self.linear=nn.Linear(d_model,vocab_size)
+
+    def forward(self, x, encoder_output):
+
+        # 1. Embed the input sequence of tokens
+        x = self.embedding(x)
+
+        # 2. Add positional encodings
+        x = self.positional_encoding(x)
+
+        # 3. Sequentially pass the result through each DecoderLayer
+        for layer in self.decoder_layers:
+            x = layer(x,encoder_output)
+
+        # 4. Apply the linear layer to predict the next token in our vocabulary
+        x = self.linear(x)
+
+        # 5. Return the final tensor
+        return x
+```
+
+## Problem 3j
+
+全部组装成`Transformer`类即可
+
+```python
+class Transformer(nn.Module):
+    def __init__(
+        self,
+        vocab_size=1024,
+        d_model=512,
+        num_encoder_layers=6,
+        num_decoder_layers=6,
+        num_heads=8,
+        verbose=False,
+    ):
+
+        # TODO: Implement the __init__ method
+        super().__init__()
+        self.encoder=TransformerEncoder(vocab_size=vocab_size,d_model=d_model,num_layers=num_encoder_layers,num_heads=num_heads,verbose=verbose)
+        self.decoder=TransformerDecoder(vocab_size=vocab_size,d_model=d_model,num_layers=num_decoder_layers,num_heads=num_heads,verbose=verbose)
+
+    def forward(self, x):
+
+        # TODO: Implement the forward method
+        # 1. Pass `x` through the encoder
+        encoder_output = self.encoder(x)
+        # 2. Pass `x` and the encoder's output through the decoder
+        x = self.decoder(x,encoder_output)
+        # 3. Return the output of the decoder
+        return x
+```
+
+
+接下来是"鉴赏"部分, 课程组帮我们准备好了`TinyStories`数据集并且做好了分词, 只不过这是个word级别的分词, 而我们在336里面实现的是byte级的
+
+## Problem 3k
+
+题目让我们处理一下段落, 其实也就是完成以下任务:
+
+-- 按换行把段落分开
+-- 每一段用之前给出的`extract_full_words`得到一个词列表
+-- 在段落的开头和结尾加上`<start>`和`<end>`
+-- 对于段落中的每个词, 用`word_to_id`得到一个ID(毕竟输入模型的不能是词语)
+-- 跳过每个比`max_seq_length`还短的段落 (这里不知道是不是课程组笔误了, 应该记作`min_seq_length`才对)
+-- 用滑动窗口得到inputs和targets, 保证targets永远比inputs长1(预测下一个token)
+
+```python
+def create_sequences(stories, word_to_id, max_seq_length=20, pad_token=PAD_TOKEN, start_token=START_TOKEN, end_token=END_TOKEN):
+    """
+    Create input/target sequences from paragraphs
+
+    Args:
+        stories (list): List of stories to create sequences from
+        word_to_id (dict): Dictionary mapping words to their token IDs
+        max_seq_length (int): Maximum sequence length to create
+        pad_token (str): Token for the pad token
+        start_token (str): Token for the start of a sequence
+        end_token (str): Token for the end of a sequence
+
+    Returns:
+        inputs (tensor): Tensor of input sequences
+        targets (tensor): Tensor of target sequences
+    """
+    inputs = []
+    targets = []
+
+    # List of paragraphs
+    paragraphs = []
+
+    # TODO: Split the stories into paragraphs and append them to the `paragraphs` list
+    for story in stories:
+        story_paragraphs = story.split("\n\n")
+        paragraphs.extend(story_paragraphs)
+
+
+    # TODO: Iterate over each paragraph, extract full words, add `<start>` and `<end>` tokens, convert to IDs, and build sequences
+    # Make sure to skip paragraphs that are too short to create any sequences
+    for paragraph in paragraphs:
+        full_words = extract_full_words(paragraph.lower())
+        full_words.insert(0,start_token)
+        full_words.append(end_token)
+        if len(full_words) < max_seq_length:
+            continue
+
+        for i in range(len(full_words)-max_seq_length):
+            input_seq = full_words[i:i+max_seq_length]
+            target_seq = full_words[i+1:i+max_seq_length+1]
+
+            input_seq = [word_to_id.get(word,0) for word in input_seq]
+            target_seq = [word_to_id.get(word,0) for word in target_seq]
+            inputs.append(input_seq)
+            targets.append(target_seq)
+            
+            
+
+    # TODO: Convert the inputs and targets to tensors of type `torch.long`
+    inputs = torch.tensor(inputs,dtype=torch.long)
+    targets = torch.tensor(targets,dtype=torch.long)
+    return inputs, targets
+
+# Generate sequences
+max_seq_length = 20
+inputs, targets = create_sequences(tiny_stories_text, word_to_id, max_seq_length)
+
+print(f"Total sequences created: {len(inputs)}")
+print(f"Each input sequence length: {len(inputs[0])}")
+print(f"Each target sequence length: {len(targets[0])}")
+```
+
+
+## Problem 3l
+
+用刚刚实现的数据集去构造`DataLoader`即可
+
+```python
+# TODO: Split into training and validation datasets (80/20 split)
+train_inputs = inputs[:2000]
+train_targets = targets[:2000]
+val_inputs = inputs[2000:2200]
+val_targets = targets[2000:2200]
+
+print(f"Number of training sequences: {len(train_inputs)}")
+print(f"Number of validation sequences: {len(val_inputs)}")
+
+# TODO: Create TensorDatasets
+train_dataset = TensorDataset(train_inputs,train_targets)
+val_dataset = TensorDataset(val_inputs,val_targets)
+
+# TODO: Create DataLoaders
+batch_size = 32
+train_loader = DataLoader(train_dataset,batch_size=batch_size,shuffle=True)
+val_loader = DataLoader(val_dataset,batch_size=batch_size,shuffle=True)
+
+print(f"Training batches: {len(train_loader)}")
+print(f"Validation batches: {len(val_loader)}")
+
+batch = next(iter(train_loader)) # Get the first batch from the training DataLoader
+
+train_input, train_target = batch # Unpack the batch into input and target tensors
+print(f"First 10 tokens of training input in first batch: {train_input[0][:10]}")
+print(f"First 10 tokens of training target in first batch: {train_target[0][:10]}")
+```
+
+```
+Number of training sequences: 2000
+Number of validation sequences: 200
+Training batches: 63
+Validation batches: 7
+First 10 tokens of training input in first batch: tensor([4546, 1945, 2585, 1379, 3266, 4146,  629, 2357, 2319, 3820])
+First 10 tokens of training target in first batch: tensor([1945, 2585, 1379, 3266, 4146,  629, 2357, 2319, 3820, 3896])
+```
+
+## Problem 3m
+
+开始训练
+
+```python
+# Transformer training loop
+def train_transformer(
+    model,
+    device,
+    optimizer,
+    criterion,
+    num_epochs,
+    train_dataloader,
+    val_dataloader,
+    vocab,
+):
+    # === SETUP ===
+    # Move model to device
+    model.to(device)
+
+    # Lists to store metrics across epochs
+    train_losses = []
+    val_losses = []
+
+    # === EPOCH LOOP ===
+    for epoch in tqdm(range(num_epochs)):
+        # === TRAINING PHASE ===
+        model.train()  # Set model to training mode
+
+        # Initialize metrics for this epoch
+        total_train_loss = 0.0
+
+        # === INNER LOOP (iterate over training batches) ===
+        for batch_inputs, batch_targets in tqdm(train_dataloader, desc="Training"):
+            # Move inputs and targets to device
+            batch_inputs = batch_inputs.to(device)
+            batch_targets = batch_targets.to(device)
+
+            # Reset the gradients
+            optimizer.zero_grad()
+
+            # Forward pass
+            logits = model(batch_inputs)  # [batch_size, seq_len, vocab_size]
+
+            # Reshape for loss calculation
+            loss = criterion(logits.reshape(-1, len(vocab)), batch_targets.reshape(-1))
+            # Compute loss
+            loss.backward()
+
+            # Optional: Add gradient clipping to prevent exploding gradients
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+
+            # Update the model parameters
+            optimizer.step()
+
+            # Accumulate the loss
+            total_train_loss += loss.item()
+
+        # === END OF INNER LOOP ===
+
+        # Compute the average loss for this epoch
+        avg_train_loss = total_train_loss / len(train_dataloader)
+        train_losses.append(avg_train_loss)
+
+        # === END OF TRAINING PHASE ===
+
+        # === VALIDATION PHASE ===
+        model.eval()  # Set model to evaluation mode
+        total_val_loss = 0.0
+
+        with torch.no_grad():
+            # === INNER LOOP (iterate over validation batches) ===
+            for batch_inputs, batch_targets in tqdm(val_dataloader, desc="Validation"):
+                # Move inputs and targets to device
+                batch_inputs = batch_inputs.to(device)
+                batch_targets = batch_targets.to(device)
+
+                # Forward pass
+                logits = model(batch_inputs)
+
+                # Compute loss
+                loss = criterion(
+                    logits.reshape(-1, len(vocab)), batch_targets.reshape(-1)
+                )
+
+                # Accumulate the loss
+                total_val_loss += loss.item()
+        # === END OF INNER LOOP ===
+
+        # Compute the average loss for this epoch
+        avg_val_loss = total_val_loss / len(val_dataloader)
+        val_losses.append(avg_val_loss)
+
+        # === END OF VALIDATION PHASE ===
+
+        # Print epoch results
+        print(f"\nEpoch {epoch + 1} Results:")
+        print(f"  Training Loss: {avg_train_loss:.4f}")
+        print(f"  Validation Loss: {avg_val_loss:.4f}")
+
+    # === END OF EPOCH LOOP ===
+
+    return train_losses, val_losses
+```
+
+```python
+# TODO: Instantiate a Transformer model
+
+vocab_size=len(vocab)
+
+transformer = Transformer(vocab_size=vocab_size,
+                                    d_model=512,
+                                    num_encoder_layers=6,
+                                    num_decoder_layers=6,
+                                    num_heads=8,
+                                    verbose=False).to(device)
+
+# TODO: Set the optimizer
+optimizer = AdamW(transformer.parameters(),lr=0.0001)
+
+# TODO: Set the loss criterion
+criterion = nn.CrossEntropyLoss()
+
+# TODO: Set the number of epochs
+num_epochs= 50
+
+# TODO: Train the model
+transformer_train_losses, transformer_val_losses = train_transformer(
+    model=transformer,
+    optimizer=optimizer,
+    criterion=criterion,
+    num_epochs=num_epochs,
+    train_dataloader=train_loader,
+    val_dataloader=val_loader,
+    device=device,
+    vocab=vocab
+)
+```
+
+
+## Problem 3n
+
+和之前一样画出损失曲线
+
+```python
+# TODO: Plot the training and validation loss across the epochs
+
+def plot_metrics_transformer(train_losses, val_losses, num_epochs=None, title=""):
+    """
+    Plots the training loss, training accuracy, validation loss, and validation accuracy.
+    Args:
+        train_losses: list of training losses
+        val_losses: list of validation losses
+        train_accuracies: list of training accuracies
+        val_accuracies: list of validation accuracies
+        num_epochs: number of epochs
+        title: title of the plot
+    """
+    fig, axes = plt.subplots(1, 2, figsize=(12, 8))
+
+    # 训练损失
+    axes[0].plot(train_losses, label='Training Loss')
+    axes[0].set_title('Training Loss')
+    axes[0].set_xlabel('Epoch')
+    axes[0].set_ylabel('Loss')
+
+
+    axes[1].plot(val_losses, label='Validation Loss')
+    axes[1].set_title('Validation Loss')
+    axes[1].set_xlabel('Epoch')
+    axes[1].set_ylabel('Loss')
+
+
+
+    plt.tight_layout()
+    plt.suptitle(title)
+    plt.show()
+    
+plot_metrics_transformer(train_losses=transformer_train_losses,val_losses=transformer_val_losses,
+num_epochs=50,title="Transformer Training Metrics")
+
+print(f"Final Training Loss: {transformer_train_losses[-1]:.4f}")
+print(f"Final Validation Loss: {transformer_val_losses[-1]:.4f}")
+```
+
+<img src="/images/189_hw4/hw4_4.png" alt="label_plot" />
+
+## Problem 3o
+
+接下来就可以让我们的模型帮我们生成点东西了, 自由发挥即可
+
+```python
+# TODO: Generate your own tiny story!
+sample_text = "I love you"
+
+
+sample_text = generate_sample(
+    model=transformer,
+    word_to_id=word_to_id,
+    id_to_word=id_to_word,
+    max_seq_len=20,
+    prompt=sample_text,   
+    max_length=50
+)
+
+
+print(f"Sample generation: {sample_text}")
+```
+
+```
+Sample generation: shoes love you re lucky you re lucky you re lucky you re lucky you have a shield timmy looked at his shirt and saw that he was wearing his favorite superhero shirt he felt better and said thanks billy you re a good friend <end>
+```
+
+<Aside type="caution" title="彻底理解Transformer">
+由于我是先写的336再写的这个189的Transformer Lab, 我觉得这里的实现还是太过于调包了, 如果真的要理解, 还是建议大家去写336
+(退一步讲, 既然都允许调这么多包的话, 为什么不直接from torch.nn import Transformer呢)
+</Aside>
