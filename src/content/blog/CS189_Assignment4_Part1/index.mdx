@@ -147,3 +147,635 @@ assert out.shape == torch.Size([1, 10]), f"Expected output shape (1, 10), but go
 Shape of input: torch.Size([1, 3, 224, 224])
 Shape of output: torch.Size([1, 10])
 ```
+
+## 理解HF Dataset对象
+
+很多时候要用HuggingFace的`load_dataset`来加载数据集, 所以有必要看一下加载的数据集对象的数据结构, 运行示例代码即可
+
+```
+All classes in the ImageNet dataset: {0: 'house_finch', 1: 'robin', 2: 'triceratops', 3: 'green_mamba', 4: 'harvestman', 5: 'toucan', 6: 'goose', 7: 'jellyfish', 8: 'nematode', 9: 'king_crab', 10: 'dugong', 11: 'Walker_hound', 12: 'Ibizan_hound', 13: 'Saluki', 14: 'golden_retriever', 15: 'Gordon_setter', 16: 'komondor', 17: 'boxer', 18: 'Tibetan_mastiff', 19: 'French_bulldog', 20: 'malamute', 21: 'dalmatian', 22: 'Newfoundland', 23: 'miniature_poodle', 24: 'white_wolf', 25: 'African_hunting_dog', 26: 'Arctic_fox', 27: 'lion', 28: 'meerkat', 29: 'ladybug', 30: 'rhinoceros_beetle', 31: 'ant', 32: 'black-footed_ferret', 33: 'three-toed_sloth', 34: 'rock_beauty', 35: 'aircraft_carrier', 36: 'ashcan', 37: 'barrel', 38: 'beer_bottle', 39: 'bookshop', 40: 'cannon', 41: 'carousel', 42: 'carton', 43: 'catamaran', 44: 'chime', 45: 'clog', 46: 'cocktail_shaker', 47: 'combination_lock', 48: 'crate', 49: 'cuirass', 50: 'dishrag', 51: 'dome', 52: 'electric_guitar', 53: 'file', 54: 'fire_screen', 55: 'frying_pan', 56: 'garbage_truck', 57: 'hair_slide', 58: 'holster', 59: 'horizontal_bar', 60: 'hourglass', 61: 'iPod', 62: 'lipstick', 63: 'miniskirt', 64: 'missile', 65: 'mixing_bowl', 66: 'oboe', 67: 'organ', 68: 'parallel_bars', 69: 'pencil_box', 70: 'photocopier', 71: 'poncho', 72: 'prayer_rug', 73: 'reel', 74: 'school_bus', 75: 'scoreboard', 76: 'slot', 77: 'snorkel', 78: 'solar_dish', 79: 'spider_web', 80: 'stage', 81: 'tank', 82: 'theater_curtain', 83: 'tile_roof', 84: 'tobacco_shop', 85: 'unicycle', 86: 'upright', 87: 'vase', 88: 'wok', 89: 'worm_fence', 90: 'yawl', 91: 'street_sign', 92: 'consomme', 93: 'trifle', 94: 'hotdog', 95: 'orange', 96: 'cliff', 97: 'coral_reef', 98: 'bolete', 99: 'ear'}
+Dataset({
+    features: ['image', 'label'],
+    num_rows: 1000
+})
+Dataset({
+    features: ['image', 'label'],
+    num_rows: 200
+})
+```
+
+注意到他是个嵌套的数据结构
+
+## Problem 1b
+
+对于得到的数据集, 我们总是希望把它写成一个`PyTorch`的`Dataset`类的子类, 好处在于可以传递给`DataLoader`类, 各种操作都很方便, 而且:
+
+-- 可以做批次, 打乱顺序以及并行加载
+-- 将数据的预处理写成标准代码, 可读性好
+
+总之就是比自己写一个类好得多
+
+要完成这一点我们至少要继承`torch.utils.data.Dataset`类并且实现以下三个方法:
+```python
+class myDataset(Dataset):
+
+    def __init__(self, ...):
+        raise NotImplementedError
+        # save data
+        # initialize preprocessing
+        # set up configurations
+
+    def __len__(self):
+        raise NotImplementedError
+        # return total number(rows) of dataset
+
+    def __getitem__(self, idx):
+        raise NotImplementedError
+        # return a single data and its label from dataset
+        # preprocessing will also be done here
+```
+
+`__init__`和`__len__`比较容易实现, 讲一下`__getitem__`, 先分析一下数据结构和他的Hints:
+
+之前拿到的Dataset嵌套结构是:
+```
+Dataset({
+    features: ['image', 'label'],
+    num_rows: 1000
+})
+Dataset({
+    features: ['image', 'label'],
+    num_rows: 200
+})
+```
+
+如果想获得一个image和label, 应该要:
+```python
+# 在__getitem__里面
+# 假设self.dataset已经初始化完毕
+sample = self.dataset[idx]
+img = sample['image']
+label = sample['label']
+```
+
+接下来要分出RGB channel, 按照Hint里面要对image用`convert`方法
+
+```python
+img = img.convert("RGB")
+```
+
+查了一下API, 这个image是`PIL Image`对象, 有一个`convert`方法转化出指定的颜色模式
+
+接下来还需要实现一个`show_images`方法来画图, 这个就没什么多说的, 也就是通过类别找到图像, 切割出一些index去plot
+
+完整代码如下:
+```python
+class MiniImageNetDataset(Dataset):
+    def __init__(
+        self,
+        dataset,
+        class_id_to_name: dict[int, str],
+        split: str = "train",
+        transform: transforms.Compose = None,
+    ):
+        """
+        Args:
+            dataset (datasets.Dataset): HuggingFace dataset object
+                Each sample in the dataset has:
+                - An "image" field that contains the image data
+                - A "label" field that contains the numeric class ID
+            class_id_to_name (dict): dictionary mapping numeric class IDs to class names
+            split (str): "train" or "val" or "test"
+        """
+        # TODO: Implement the __init__ method of the MiniImageNetDataset
+        self.split = split
+        self.dataset = dataset
+        self.transform = transform
+        self.class_id_to_name = class_id_to_name
+
+    def __len__(self):
+        # TODO: Implement the __len__ method of the MiniImageNetDataset
+        return len(self.dataset)
+
+    def __getitem__(self, index):
+        """
+        Returns a single sample from the dataset at the given index.
+        Args:
+            index (int): index of the item to get
+        Returns:
+            tuple: (image, label) where image is a tensor of shape C x H x W and label is a tensor of shape 1
+        """
+
+        # TODO: Implement the __getitem__ method of the MiniImageNetDataset
+        # Don't forget to...
+        # - Cast the item and label to torch.Tensor with the correct dtype
+        # - Permute the image into the shape (C, H, W)
+        # - Apply the transform if it's not None
+        sample = self.dataset[index]
+        img = sample['image']
+        label = sample['label']
+
+        img = img.convert("RGB")
+        
+        if self.transform is not None:
+            img=self.transform(img)
+
+        label = torch.tensor(label,dtype=torch.long)
+        return img, label
+
+    def show_images(self, num_images: int = 10):
+        """
+        Visualize images in a grid layout.
+
+        Args:
+            num_images (int): Number of images to display per class
+
+        Returns:
+            tuple: (fig, ax) - Matplotlib figure and axes objects
+        """
+        # TODO: Implement the show_images method
+        # Make sure to call fig.show() or plt.show() to display your grid of images at the end!
+        
+        # 所有类别 ID，按从小到大排序，方便排版
+        class_ids = sorted(self.class_id_to_name.keys())
+        n_classes = len(class_ids)
+
+        # 创建子图：每一行一个类别，每行 num_images 张图
+        fig, axes = plt.subplots(n_classes, num_images, figsize=(num_images * 2, n_classes * 2))
+
+        # 当只有 1 行或 1 列时，axes 不是二维数组，做个统一处理
+        if n_classes == 1:
+            axes = [axes]
+        if num_images == 1:
+            axes = [[ax] for ax in axes]
+
+        # 对每个类别画图
+        for row, cls in enumerate(class_ids):
+            # 找到属于该类别的样本下标
+            idxs = [i for i, y in enumerate(self.dataset["label"]) if y == cls]
+            # 只取前 num_images 个
+            idxs = idxs[:num_images]
+
+            for col, idx in enumerate(idxs):
+                img = self.dataset[idx]["image"]  # 通常是 PIL.Image
+                ax = axes[row][col]
+                ax.imshow(img)
+                ax.axis("off")
+                # 每一行第一个子图上写类别名字
+                if col == 0:
+                    ax.set_title(self.class_id_to_name[cls])
+
+        plt.tight_layout()
+        plt.show()  # 或 fig.show()
+        return fig, axes
+```
+
+## Problem 1c
+
+先来看看如何构造数据的变换, 这里利用的是:
+```python
+import torchvision.transforms as transforms
+```
+
+从这里(https://docs.pytorch.org/vision/0.8/transforms.html) 可以查到各种变换的用法, 题目里直接用他给的就行了, 为了把好几个变换做成变换序列, 需要用`transforms.Compose`, 或者(按文档中的说法)用`torch.nn.Sequential`也可以
+
+
+```python
+train_transform = transforms.Compose([
+    transforms.Resize(256),                  # Resize the shorter side to 256
+    transforms.RandomCrop(224),              # Random crop into shape 224×224
+    transforms.RandomHorizontalFlip(),       # Random horizontal flip
+    transforms.ToTensor(),                   # Convert to tensor, scale to [0,1], and permute into shape (C, H, W)
+    transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                         std=[0.229, 0.224, 0.225]) # Normalize
+])
+
+val_transform = transforms.Compose([
+    transforms.Resize(256),
+    transforms.CenterCrop(224),
+    transforms.ToTensor(),
+    transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                         std=[0.229, 0.224, 0.225])
+])
+
+train_dataset = MiniImageNetDataset(mini_imagenet_train, class_id_to_name, split="train", transform=train_transform)
+val_dataset = MiniImageNetDataset(mini_imagenet_val, class_id_to_name, split="val", transform=val_transform)
+```
+
+从最后两行可以看出, 用这种继承`Dataset`的方式构造数据集很方便, 构造完毕后写成一个`DataLoader`也仅需一行代码
+
+```python
+train_dataloader = DataLoader(train_dataset,batch_size=32,shuffle=True)
+val_dataloader = DataLoader(val_dataset,batch_size=32,shuffle=True)
+
+
+# Print the first batch of data and labels
+for batch in train_dataloader: # each batch is a tuple of (data, labels)
+    data = batch[0] # data is a tensor of shape (B, 3, 224, 224)
+    labels = batch[1] # labels is a tensor of shape (B,)
+    print(f"Shape of data: {data.shape}")
+    print(f"Shape of labels: {labels.shape}")
+    break
+```
+
+现在我们就可以通过循环去访问`train_dataloader`里面的batch, 再通过下标去访问数据和标签了
+
+## Problem 1d
+
+实现CNN的训练
+
+### 训练循环的抽象
+
+理论上所有训练循环的抽象代码都差不多, 示例如下:
+
+Step1: 把模型转移到device上(cpu/gpu)
+```python
+model.to(device)
+```
+
+Step2: 决定`num_epochs`并启动外层循环, 决定要遍历数据集多少次
+
+```python
+for epoch in range(num_epochs):
+    # training logic
+```
+
+Step3: 外层循环内每次都要把model设置为train模式
+```python
+model.train()
+```
+
+Step4: 启动内层循环, 遍历数据集的x和y, 这个内层循环一次处理一个batch
+
+```python
+for x, y in train_dataloader:
+    x = x.to(device, dtype = torch.float)
+    y = y.to(device, dtype = torch.long)
+
+```
+
+Step5: 清零梯度
+```python
+optimizer.zero_grad()
+```
+
+Step6: 前向传播
+```python
+y_hat = model(x)
+```
+
+Step7: 计算损失
+```python
+loss = criterion(y_hat, y)
+```
+这里的`criterion`是预设的损失函数, 比如说`nn.CrossEntropyLoss`
+
+Step8: 反向传播
+```python
+loss.backward()
+```
+
+Step9: 更新参数
+```python
+optimizer.step()
+```
+
+Step10: 记录损失
+```python
+train_loss = loss.item()
+preds = torch.argmax(y_hat, dim=1)
+train_correct += (preds == y).sum().item()
+
+Step11: 每个epoch结束之后计算`val_dataset`上的准确率, 这段代码是在内层循环外面的
+
+```python
+model.eval()
+with torch.no_grad():
+    for x,y in val_dataloader:
+        x = x.to(device, dtype = torch.float)
+        y = y.to(device, dtype = torch.long)
+
+        y_hat = model(x)
+        loss = criterion(y_hat, y)
+        val_loss += loss.item()
+        preds = torch.argmax(y_hat, dim=1)
+        val_correct += (preds == y).sum().item()
+
+val_loss /= len(val_dataloader)
+```
+
+完整的抽象代码如下:
+```python
+# === SETUP ===
+model.to(device)
+
+# === EPOCH LOOP ===
+for epoch in range(num_epochs):
+    train_loss = 0.0
+    train_correct = 0.0
+    
+    # === TRAINING PHASE ===
+    model.train()  # Enable training mode
+    
+    for x, y in train_dataloader:
+        # 1. Move data to device
+        x, y = x.to(device), y.to(device)
+        
+        # 2. Reset gradients
+        optimizer.zero_grad()
+        
+        # 3. Forward pass
+        y_hat = model(x)
+        
+        # 4. Compute loss
+        loss = criterion(y_hat, y)
+        
+        # 5. Backward pass (compute gradients)
+        loss.backward()
+        
+        # 6. Update weights
+        optimizer.step()
+        
+        # 7. Track metrics (optional)
+        # ...
+    
+    # === VALIDATION PHASE ===
+    model.eval()  # Disable training-specific layers
+    with torch.no_grad():  # Don't compute gradients
+        for x, y in val_dataloader:
+            # Forward pass only, no backward pass!
+            y_hat = model(x)
+            loss = criterion(y_hat, y)
+            # Track validation metrics
+
+```
+
+在一个epoch内, 可能会有很多batch, 每个batch我们会计算一次损失并且加入到train_loss里面, 直到这个epoch结束, 用train_loss/len(train_dataloader)就是平均损失, val_loss只在一个epoch结束之后算一次, 举例如下:
+
+
+假设训练集有 1000 个样本, `batch_size = 100`, 那么每个 epoch 有 10 个 batch。在训练过程中, 每处理一个 batch, 我们计算一次该 batch 的 loss(比如分别是 0.85, 0.72, 0.68, ..., 0.55), 并累加到 `train_loss` 中。Epoch 结束后，用 `train_loss / len(train_dataloader)` 得到平均训练损失(比如 6.5 / 10 = 0.65). 而 `val_loss` 只有在整个 epoch 的训练结束后才会计算, 它反映模型在验证集上的表现。
+
+
+完整代码如下, 依葫芦画瓢即可:
+```python
+# Common practice to check if GPU is available
+if torch.accelerator.is_available():
+    device = torch.accelerator.current_accelerator()
+else:
+    device = "cpu"
+print(f"Using device: {device}")
+assert str(device) in ["cuda", "mps"], "Please make sure you are using an accelerator (e.g. GPU or MPS)"
+
+
+def train(
+    model, optimizer, criterion, num_epochs, train_dataloader, val_dataloader=None
+):
+    """
+    Args:
+        model: the model to train
+        optimizer: the optimizer to use
+        criterion: the loss function to use
+        num_epochs: the number of epochs to train for
+        train_dataloader: the dataloader for the training set
+        val_dataloader: the dataloader for the validation set
+    """
+    # === SETUP ===
+    model.to(device)
+
+    # == (Optional) Perform a validation loop before training as a baseline ==
+    if val_dataloader:
+        model.eval()  # Set model to evaluation mode
+        num_correct = 0.0
+        val_loss = 0.0
+        with torch.no_grad():  # Don't compute gradients
+            for x, y in val_dataloader:
+                x = x.to(device, dtype=torch.float)
+                y = y.to(device, dtype=torch.long)
+                y_hat = model(x)
+
+                loss = criterion(y_hat, y)  # pred, target
+                val_loss += loss.item()
+
+                preds = torch.argmax(y_hat, dim=1)
+                num_correct += (preds == y).sum().item()
+
+        val_acc = num_correct / len(val_dataloader.dataset)
+        tqdm.write(f"Initial validation loss: {val_loss:.4f}")
+        tqdm.write(f"Initial validation accuracy: {val_acc:.4f}")
+
+    # Lists to store metrics across epochs
+    train_accuracies = []
+    train_losses = []
+    val_accuracies = []
+    val_losses = []
+
+    epoch_pbar = tqdm(range(num_epochs), desc="Training Progress", position=0)
+
+    # === EPOCH LOOP ===
+    for epoch in epoch_pbar:
+        # === TRAINING PHASE ===
+        model.train()  # Set model to training mode
+
+        # Initialize metrics for this epoch
+        train_loss = 0.0
+        train_correct = 0.0
+
+        # === INNER LOOP (iterate over training batches) ===
+        for x, y in train_dataloader:
+            # 1. Move data to device
+            x = x.to(device, dtype=torch.float)
+            y = y.to(device, dtype=torch.long)
+
+            # 2. Reset gradients
+            optimizer.zero_grad()
+
+            # 3. Forward pass
+            y_hat = model(x)
+
+            # 4. Compute loss
+            loss = criterion(y_hat, y)
+
+            # 5. Backward pass (compute gradients)
+            loss.backward()
+
+            # 6. Update weights
+            optimizer.step()
+
+            # 7. Track metrics
+            train_loss += loss.item()  # Accumulate loss (convert to Python float)
+            preds = torch.argmax(
+                y_hat, dim=1
+            )  # Get predicted class for each item in the batch (highest prob = highest confidence)
+            train_correct += (preds == y).sum().item()  # Count correct predictions
+
+        # === END OF INNER LOOP ===
+
+        # Compute average metrics for the epoch
+        avg_train_loss = train_loss / len(
+            train_dataloader
+        )  # Average loss = total loss / total number of batches
+        train_acc = (
+            train_correct / len(train_dataloader.dataset)
+        )  # Average accuracy = accuracy / total number of data points seen across the whole epoch (i.e. in the entire dataset)
+        train_losses.append(avg_train_loss)
+        train_accuracies.append(train_acc)
+
+        print(f"\nEpoch {epoch + 1} - Training accuracy: {train_acc:.3f}")
+        print(f"Epoch {epoch + 1} - Training loss: {train_loss:.3f}")
+
+        # === END OF TRAINING PHASE ===
+
+        # === VALIDATION PHASE ===
+        if val_dataloader:
+            model.eval()  # Set model to evaluation mode
+            val_loss = 0.0
+            val_correct = 0.0
+
+            with torch.no_grad():  # Don't compute gradients
+                # === INNER LOOP (iterate over validation batches) ===
+                for x, y in val_dataloader:
+                    # 1. Move data to device
+                    x = x.to(device, dtype=torch.float)
+                    y = y.to(device, dtype=torch.long)
+
+                    # 2. Forward pass only, no backward pass!
+                    y_hat = model(x)
+
+                    # 3. Compute loss
+                    loss = criterion(y_hat, y)
+
+                    # 4. Track validation metrics
+                    val_loss += loss.item()
+                    preds = torch.argmax(y_hat, dim=1)
+                    val_correct += (preds == y).sum().item()
+
+                # === END OF INNER LOOP ===
+
+                # Compute average metrics for the epoch
+                avg_val_loss = val_loss / len(val_dataloader)
+                val_acc = val_correct / len(val_dataloader.dataset)
+
+                val_losses.append(avg_val_loss)
+                val_accuracies.append(val_acc)
+
+            # === END OF VALIDATION PHASE ===
+
+        # === END OF EPOCH LOOP ===
+
+        # Print metrics for the epoch
+        print(f"Epoch {epoch + 1} - Validation accuracy: {val_acc:.3f}")
+        print(f"Epoch {epoch + 1} - Validation loss: {val_loss:.3f}")
+
+        epoch_pbar.set_postfix(
+            {
+                "train_loss": f"{train_loss:.3f}",
+                "train_acc": f"{train_acc:.3f}",
+                "val_loss": f"{val_loss:.3f}",
+                "val_acc": f"{val_acc:.3f}",
+            }
+        )
+
+    return train_accuracies, train_losses, val_accuracies, val_losses
+```
+
+### 调用自定义的训练循环
+
+现在需要实现train函数里面的参数
+
+实现模型实例:
+```python
+cnn = CNN(num_classes=10)
+```
+
+定义循环轮次:
+```python
+num_epochs = 20
+```
+
+定义优化器:
+```python
+optimizer = AdamW(cnn.parameters(),lr=0.0005)
+```
+
+定义损失函数:
+```python
+criterion = torch.nn.CrossEntropyLoss()
+```
+
+开始训练
+```python
+cnn_train_accuracies, cnn_train_losses, cnn_val_accuracies, cnn_val_losses = train(
+    model=cnn,
+    optimizer=optimizer,
+    criterion=criterion,
+    num_epochs=num_epochs,
+    train_dataloader=train_dataloader,
+    val_dataloader=val_dataloader
+)
+```
+
+```
+Initial validation loss: 16.1283
+Initial validation accuracy: 0.1000
+Training Progress:   0%|          | 0/20 [00:00<?, ?it/s]
+Epoch 1 - Training accuracy: 0.238
+Epoch 1 - Training loss: 68.580
+Training Progress:   5%|▌         | 1/20 [00:09<03:01,  9.53s/it, train_loss=68.580, train_acc=0.238, val_loss=14.099, val_acc=0.295]Epoch 1 - Validation accuracy: 0.295
+Epoch 1 - Validation loss: 14.099
+
+Epoch 20 - Training accuracy: 0.599
+Epoch 20 - Training loss: 36.430
+Training Progress: 100%|██████████| 20/20 [03:13<00:00,  9.67s/it, train_loss=36.430, train_acc=0.599, val_loss=11.613, val_acc=0.525]Epoch 20 - Validation accuracy: 0.525
+Epoch 20 - Validation loss: 11.613
+```
+
+## Problem 1e
+
+写一个画图函数来画损失曲线和准确率曲线
+
+```python
+def plot_metrics(train_losses, val_losses, train_accuracies=None, val_accuracies=None, num_epochs=None, title=""):
+    """
+    Plots the training loss, training accuracy, validation loss, and validation accuracy.
+    Args:
+        train_losses: list of training losses
+        val_losses: list of validation losses
+        train_accuracies: list of training accuracies
+        val_accuracies: list of validation accuracies
+        num_epochs: number of epochs
+        title: title of the plot
+    """
+    fig, axes = plt.subplots(2, 2, figsize=(12, 8))
+
+    # 训练损失
+    axes[0, 0].plot(train_losses, label='Training Loss')
+    axes[0, 0].set_title('Training Loss')
+    axes[0, 0].set_xlabel('Epoch')
+    axes[0, 0].set_ylabel('Loss')
+
+    axes[0, 1].plot(train_accuracies, label='Training Accuracy')
+    axes[0, 1].set_title('Training Accuracy')
+    axes[0, 1].set_xlabel('Epoch')
+    axes[0, 1].set_ylabel('Accuracy')
+
+    axes[1, 0].plot(val_losses, label='Validation Loss')
+    axes[1, 0].set_title('Validation Loss')
+    axes[1, 0].set_xlabel('Epoch')
+    axes[1, 0].set_ylabel('Loss')
+
+    axes[1, 1].plot(val_accuracies, label='Validation Accuracy')
+    axes[1, 1].set_title('Validation Accuracy')
+    axes[1, 1].set_xlabel('Epoch')
+    axes[1, 1].set_ylabel('Accuracy')
+
+    plt.tight_layout()
+    plt.suptitle(title)
+    plt.show()
+    
+    
+    
+plot_metrics(cnn_train_losses, cnn_val_losses, cnn_train_accuracies, cnn_val_accuracies, num_epochs=20, title="CNN Training Metrics")
+```
+
+
+<img src="/images/189_hw4/hw4_1.png" alt="label_plot" />
